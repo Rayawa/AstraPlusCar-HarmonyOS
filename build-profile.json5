@@ -1,0 +1,56 @@
+{
+  "app": {
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "/Users/raychen/.ohos/config/default_AstraPlusCar_o5qIv-BCsefYWlQu-8lp12g4VkO0PsIczwxXcOOM06o=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001A76EF39480C957024ED178C1A99B17761E03DD60336275EDA309A274B2AC34A759EA1EA774B88",
+          "profile": "/Users/raychen/.ohos/config/default_AstraPlusCar_o5qIv-BCsefYWlQu-8lp12g4VkO0PsIczwxXcOOM06o=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "/Users/raychen/.ohos/config/default_AstraPlusCar_o5qIv-BCsefYWlQu-8lp12g4VkO0PsIczwxXcOOM06o=.p12",
+          "storePassword": "0000001ABC6C5FA1C316F9E94CCBDCC84520818A38CB1F4014221CAA15797EE7170BCD5291E630408854"
+        }
+      }
+    ],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "default",
+        "targetSdkVersion": "26.0.0",
+        "compatibleSdkVersion": "6.0.0(20)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug",
+      },
+      {
+        "name": "release"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}
