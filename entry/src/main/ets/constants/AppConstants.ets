@@ -1,6 +1,6 @@
 /** Application-wide defaults and limits. Keep device protocol values here. */
 export class CarDefaults {
-  static readonly ENDPOINT: string = 'http://192.168.8.204:8080';
+  static readonly ENDPOINT: string = 'http://192.168.149.1:8080';
   static readonly SPEED: number = 35;
   static readonly VERTICAL_ANGLE: number = 90;
   static readonly HORIZONTAL_ANGLE: number = 65;

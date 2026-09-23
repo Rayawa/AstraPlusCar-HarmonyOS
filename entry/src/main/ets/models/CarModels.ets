@@ -42,6 +42,11 @@ export interface CaptureListPayload {
   captures?: string[];
 }
 
+export interface CommandPayload {
+  ok?: boolean;
+  accepted?: boolean;
+}
+
 export interface GalleryItem {
   name: string;
   url: string;
