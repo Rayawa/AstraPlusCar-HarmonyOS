@@ -5,6 +5,7 @@ import {
   ApiResult,
   ApiErrorPayload,
   CaptureListPayload,
+  CommandPayload,
   CarAction,
   CarCommand,
   failureResult,
@@ -119,6 +120,11 @@ export class CarApi {
             return failureResult('相册响应格式无效', response.responseCode);
           }
           result.captures = gallery.captures;
+        } else if (path === ApiRoutes.MOVE || path === ApiRoutes.STOP || path === ApiRoutes.SERVO) {
+          const command = CarApi.parseCommandPayload(response.result.toString());
+          if (command.ok !== true || command.accepted !== true) {
+            return failureResult('车端未接受指令（可能是过期序号）', response.responseCode);
+          }
         }
         return result;
       }
@@ -164,6 +170,15 @@ export class CarApi {
   private static parseCaptureList(value: string): CaptureListPayload {
     try {
       const payload = JSON.parse(value) as CaptureListPayload;
+      return payload === null ? {} : payload;
+    } catch (error) {
+      return {};
+    }
+  }
+
+  private static parseCommandPayload(value: string): CommandPayload {
+    try {
+      const payload = JSON.parse(value) as CommandPayload;
       return payload === null ? {} : payload;
     } catch (error) {
       return {};

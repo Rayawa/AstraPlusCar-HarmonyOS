@@ -145,9 +145,11 @@ struct Index {
 
     this.cameraReady = health.cameraReady !== false;
     if (!servo.ok) {
-      this.statusText = `已连接 · 云台初始化失败：${servo.message}`;
-      this.addConnectionLog(`云台初始化失败：${servo.message}`, 'WARN');
-    } else if (!this.cameraReady) {
+      this.addConnectionLog(`控制器检查失败：${servo.message}`, 'ERR');
+      this.finishConnectFailure(`连接失败 · 控制器不可用：${servo.message}`);
+      return;
+    }
+    if (!this.cameraReady) {
       this.statusText = '已连接 · 控制就绪，摄像头未就绪';
       this.addConnectionLog(`摄像头不可用：${health.cameraError ?? 'camera_not_ready'}`, 'WARN');
     } else {
