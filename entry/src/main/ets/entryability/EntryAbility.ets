@@ -16,6 +16,15 @@ export default class EntryAbility extends UIAbility {
     // Main window is created, set main page for this ability
     hilog.info(LogConfig.DOMAIN, LogConfig.TAG, '%{public}s', 'Ability onWindowStageCreate');
 
+    windowStage.getMainWindow()
+      .then((mainWindow: window.Window) => {
+        return mainWindow.setPreferredOrientation(window.Orientation.AUTO_ROTATION_PORTRAIT);
+      })
+      .catch((err: Error) => {
+        hilog.error(LogConfig.DOMAIN, LogConfig.TAG,
+          'Failed to set portrait orientation. Cause: %{public}s', JSON.stringify(err));
+      });
+
     windowStage.loadContent('pages/Index', (err) => {
       if (err.code) {
         hilog.error(LogConfig.DOMAIN, LogConfig.TAG, 'Failed to load content. Cause: %{public}s', JSON.stringify(err));

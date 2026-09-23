@@ -1,16 +1,9 @@
-import { AppHeader } from '../components/AppHeader';
-import { CameraPanel } from '../components/CameraPanel';
-import { ConnectionPanel } from '../components/ConnectionPanel';
-import { DrivePanel } from '../components/DrivePanel';
-import { ServoPanel } from '../components/ServoPanel';
-import { StatusBar } from '../components/StatusBar';
-import {
-  AppColors,
-  CarDefaults,
-  LayoutConfig,
-  NetworkConfig
-} from '../constants/AppConstants';
-import { ApiResult, CarAction } from '../models/CarModels';
+import { ConnectionScreen } from '../components/ConnectionScreen';
+import { GalleryScreen } from '../components/GalleryScreen';
+import { GameControlScreen } from '../components/GameControlScreen';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import { CarDefaults, CarLimits, LogConfig, NetworkConfig } from '../constants/AppConstants';
+import { ApiResult, CarAction, GalleryItem } from '../models/CarModels';
 import { CarApi } from '../services/CarApi';
 import { LocalNetworkRoute } from '../services/LocalNetworkRoute';
 
@@ -23,6 +16,7 @@ struct Index {
   private driveTimer: number = -1;
   private pendingStopTimer: number = -1;
   private connectionAttempt: number = 0;
+  private galleryRequest: number = 0;
   private driveSession: number = 0;
   private driveRequestSession: number = -1;
   private moveFailureCount: number = 0;
@@ -30,9 +24,11 @@ struct Index {
   private commandSequence: number = 0;
   private disposed: boolean = false;
 
+  @State currentScreen: string = 'connection';
   @State endpoint: string = CarDefaults.ENDPOINT;
   @State connected: boolean = false;
   @State connecting: boolean = false;
+  @State cameraReady: boolean = false;
   @State cameraEnabled: boolean = false;
   @State captureBusy: boolean = false;
   @State frameUrl: string = '';
@@ -41,19 +37,24 @@ struct Index {
   @State horizontalAngle: number = CarDefaults.HORIZONTAL_ANGLE;
   @State activeAction: CarAction = CarAction.NONE;
   @State statusText: string = '等待连接';
-  @State isWide: boolean = false;
+  @State connectionLogs: string[] = ['[--:--:--] [INFO] 应用已启动，等待输入车端地址'];
+  @State galleryItems: GalleryItem[] = [];
+  @State galleryLoading: boolean = false;
+  @State galleryMessage: string = '照片保存在车端 capture 目录';
   @State captureCount: number = 0;
 
   aboutToAppear(): void {
     this.disposed = false;
     this.connected = false;
     this.connecting = false;
+    this.currentScreen = 'connection';
     this.api.setBaseUrl(this.endpoint);
   }
 
   aboutToDisappear(): void {
     this.disposed = true;
     this.connectionAttempt += 1;
+    this.galleryRequest += 1;
     this.servoRequest += 1;
     this.releaseControls();
     this.stopAndReleaseNetwork(this.connected, this.connectionAttempt);
@@ -63,8 +64,25 @@ struct Index {
 
   onPageHide(): void {
     if (!this.disposed && (this.connected || this.connecting)) {
-      this.suspendConnection('应用已进入后台 · 已安全断开');
+      this.suspendConnection('应用进入后台，已安全断开');
     }
+  }
+
+  private addConnectionLog(message: string, level: string = 'INFO'): void {
+    const now = new Date();
+    const time = `${this.pad(now.getHours())}:${this.pad(now.getMinutes())}:${this.pad(now.getSeconds())}`;
+    this.connectionLogs = [...this.connectionLogs, `[${time}] [${level}] ${message}`].slice(-10);
+    if (level === 'ERR') {
+      hilog.error(LogConfig.DOMAIN, LogConfig.TAG, '[%{public}s] %{public}s', level, message);
+    } else if (level === 'WARN') {
+      hilog.warn(LogConfig.DOMAIN, LogConfig.TAG, '[%{public}s] %{public}s', level, message);
+    } else {
+      hilog.info(LogConfig.DOMAIN, LogConfig.TAG, '[%{public}s] %{public}s', level, message);
+    }
+  }
+
+  private pad(value: number): string {
+    return value < 10 ? `0${value}` : `${value}`;
   }
 
   private async connect(): Promise<void> {
@@ -74,34 +92,47 @@ struct Index {
     const normalized = CarApi.normalizeEndpoint(this.endpoint);
     if (normalized.length === 0 || !this.api.setBaseUrl(normalized)) {
       this.statusText = '车端地址格式无效';
+      this.addConnectionLog('地址格式无效，请填写 IP:端口或完整 URL', 'ERR');
       return;
     }
     this.endpoint = normalized;
     const attempt = ++this.connectionAttempt;
     this.connecting = true;
-    this.statusText = '正在选择局域网…';
-
-    const routeReady = await this.localNetworkRoute.bind();
-    if (!this.isCurrentAttempt(attempt)) {
-      await this.releaseNetworkIfNoActiveConnection();
-      return;
-    }
-    if (!routeReady) {
-      this.finishConnectFailure('未检测到 Wi-Fi 或有线局域网');
-      return;
-    }
     this.statusText = '正在连接小车…';
+    this.addConnectionLog(`开始探测 ${normalized}/api/health`);
 
-    const health = await this.api.health();
+    let health: ApiResult = await this.api.health();
     if (!this.isCurrentAttempt(attempt)) {
       await this.releaseNetworkIfNoActiveConnection();
       return;
     }
     if (!health.ok) {
+      this.statusText = '直连失败，正在通过 Wi-Fi 重试…';
+      this.addConnectionLog(`直连失败：${health.message}`, 'WARN');
+      this.addConnectionLog('尝试将应用流量绑定到当前 Wi-Fi');
+      const routeReady = await this.localNetworkRoute.bind();
+      if (!this.isCurrentAttempt(attempt)) {
+        await this.releaseNetworkIfNoActiveConnection();
+        return;
+      }
+      if (routeReady) {
+        this.addConnectionLog('Wi-Fi 路由绑定成功，重新探测');
+        health = await this.api.health();
+        if (!this.isCurrentAttempt(attempt)) {
+          await this.releaseNetworkIfNoActiveConnection();
+          return;
+        }
+      } else {
+        this.addConnectionLog('Wi-Fi 路由绑定不可用', 'WARN');
+      }
+    }
+    if (!health.ok) {
+      this.addConnectionLog(`连接失败：${health.message}`, 'ERR');
       this.finishConnectFailure(`连接失败 · ${health.message}`);
       return;
     }
 
+    this.addConnectionLog('健康检查通过，正在初始化云台');
     const servo = await this.api.servo(
       this.verticalAngle,
       this.horizontalAngle,
@@ -111,17 +142,23 @@ struct Index {
       await this.releaseNetworkIfNoActiveConnection();
       return;
     }
+
+    this.cameraReady = health.cameraReady !== false;
     if (!servo.ok) {
       this.statusText = `已连接 · 云台初始化失败：${servo.message}`;
-    } else if (health.cameraReady === false) {
+      this.addConnectionLog(`云台初始化失败：${servo.message}`, 'WARN');
+    } else if (!this.cameraReady) {
       this.statusText = '已连接 · 控制就绪，摄像头未就绪';
+      this.addConnectionLog(`摄像头不可用：${health.cameraError ?? 'camera_not_ready'}`, 'WARN');
     } else {
       this.statusText = '已连接 · 控制就绪';
+      this.addConnectionLog('连接成功，进入操控界面');
     }
 
     this.connecting = false;
     this.connected = true;
-    if (health.cameraReady !== false) {
+    this.currentScreen = 'control';
+    if (this.cameraReady) {
       this.startCamera();
     }
   }
@@ -133,23 +170,30 @@ struct Index {
   private finishConnectFailure(message: string): void {
     this.connecting = false;
     this.connected = false;
+    this.cameraReady = false;
     this.stopCamera();
     this.statusText = message;
+    this.currentScreen = 'connection';
     this.releaseNetworkWhenInactive(this.connectionAttempt);
   }
 
   private disconnect(): void {
-    this.suspendConnection('已断开');
+    this.addConnectionLog('用户主动断开连接');
+    this.suspendConnection('已断开，可重新连接');
   }
 
   private suspendConnection(message: string): void {
     const shouldStop = this.connected;
     const attempt = ++this.connectionAttempt;
+    this.galleryRequest += 1;
     this.servoRequest += 1;
     this.releaseControls();
     this.connected = false;
     this.connecting = false;
+    this.cameraReady = false;
+    this.currentScreen = 'connection';
     this.statusText = message;
+    this.addConnectionLog(message);
     this.stopAndReleaseNetwork(shouldStop, attempt);
   }
 
@@ -158,11 +202,15 @@ struct Index {
       return;
     }
     this.connectionAttempt += 1;
+    this.galleryRequest += 1;
     this.servoRequest += 1;
     this.releaseControls();
     this.connected = false;
     this.connecting = false;
+    this.cameraReady = false;
+    this.currentScreen = 'connection';
     this.statusText = message;
+    this.addConnectionLog(`连接错误：${message}`, 'ERR');
     this.releaseNetworkWhenInactive(this.connectionAttempt);
   }
 
@@ -199,7 +247,8 @@ struct Index {
   }
 
   private startCamera(): void {
-    if (!this.connected || this.cameraEnabled || this.disposed) {
+    if (!this.connected || !this.cameraReady || this.cameraEnabled || this.disposed ||
+      this.currentScreen !== 'control') {
       return;
     }
     this.cameraEnabled = true;
@@ -216,14 +265,17 @@ struct Index {
   }
 
   private refreshFrame(): void {
-    if (this.cameraEnabled && this.connected && !this.disposed) {
+    if (this.cameraEnabled && this.connected && !this.disposed && this.currentScreen === 'control') {
       this.frameUrl = this.api.frameUrl(Date.now());
     }
   }
 
   private beginMove(action: CarAction): void {
-    if (!this.connected || action === CarAction.NONE) {
+    if (!this.connected || this.currentScreen !== 'control' || action === CarAction.NONE) {
       this.statusText = '请先连接小车';
+      return;
+    }
+    if (this.activeAction === action) {
       return;
     }
     this.cancelPendingStop();
@@ -232,9 +284,7 @@ struct Index {
     this.moveFailureCount = 0;
     this.activeAction = action;
     this.sendMove(action, session);
-    this.driveTimer = setInterval(() => {
-      this.sendMove(action, session);
-    }, NetworkConfig.DRIVE_KEEP_ALIVE_MS);
+    this.driveTimer = setInterval(() => this.sendMove(action, session), NetworkConfig.DRIVE_KEEP_ALIVE_MS);
   }
 
   private async sendMove(action: CarAction, session: number): Promise<void> {
@@ -260,7 +310,8 @@ struct Index {
   }
 
   private isActiveDrive(action: CarAction, session: number): boolean {
-    return !this.disposed && this.connected && session === this.driveSession && this.activeAction === action;
+    return !this.disposed && this.connected && this.currentScreen === 'control' &&
+      session === this.driveSession && this.activeAction === action;
   }
 
   private endMove(action: CarAction): void {
@@ -321,12 +372,14 @@ struct Index {
     return this.commandSequence;
   }
 
-  private onAnglesChange(vertical: number, horizontal: number, commit: boolean): void {
+  private stepServo(verticalDelta: number, horizontalDelta: number): void {
+    const vertical = Math.max(CarLimits.VERTICAL_MIN,
+      Math.min(CarLimits.VERTICAL_MAX, this.verticalAngle + verticalDelta));
+    const horizontal = Math.max(CarLimits.HORIZONTAL_MIN,
+      Math.min(CarLimits.HORIZONTAL_MAX, this.horizontalAngle + horizontalDelta));
     this.verticalAngle = vertical;
     this.horizontalAngle = horizontal;
-    if (commit) {
-      this.updateServo(vertical, horizontal);
-    }
+    this.updateServo(vertical, horizontal);
   }
 
   private resetServo(): void {
@@ -368,105 +421,113 @@ struct Index {
     this.captureBusy = false;
     if (result.ok) {
       this.captureCount += 1;
-      this.statusText = `截图已保存至车端 capture 目录 · ${this.captureCount} 张`;
+      this.statusText = `截图已保存 · 本次连接第 ${this.captureCount} 张`;
+      this.galleryMessage = '截图成功，已显示最新照片';
       this.refreshFrame();
+      if (this.currentScreen === 'gallery') {
+        this.loadGallery();
+      }
     } else if (result.statusCode === 503) {
       this.statusText = '截图失败 · 摄像头尚未就绪';
+      this.galleryMessage = this.statusText;
     } else {
-      this.statusText = '截图失败 · 请检查摄像头与连接';
+      this.statusText = `截图失败 · ${result.message}`;
+      this.galleryMessage = this.statusText;
     }
+  }
+
+  private openGallery(): void {
+    if (!this.connected) {
+      return;
+    }
+    this.stopDriveTimer();
+    this.cancelPendingStop();
+    this.driveSession += 1;
+    this.activeAction = CarAction.NONE;
+    const gallerySession = this.driveSession;
+    this.sendStop('已停车，可浏览相册', gallerySession);
+    this.stopCamera();
+    this.currentScreen = 'gallery';
+    this.loadGallery();
+  }
+
+  private closeGallery(): void {
+    if (!this.connected) {
+      this.currentScreen = 'connection';
+      return;
+    }
+    this.currentScreen = 'control';
+    this.startCamera();
+  }
+
+  private async loadGallery(): Promise<void> {
+    if (!this.connected) {
+      return;
+    }
+    const request = ++this.galleryRequest;
+    this.galleryLoading = true;
+    this.galleryMessage = '正在读取车端照片…';
+    const result = await this.api.captures();
+    if (this.disposed || !this.connected || request !== this.galleryRequest) {
+      return;
+    }
+    this.galleryLoading = false;
+    if (!result.ok || result.captures === undefined) {
+      this.galleryMessage = `相册读取失败 · ${result.message}`;
+      return;
+    }
+    const stamp = Date.now();
+    const items: GalleryItem[] = [];
+    result.captures.forEach((name: string) => {
+      items.push({ name: name, url: this.api.captureUrl(name, stamp) });
+    });
+    this.galleryItems = items;
+    this.galleryMessage = items.length > 0 ? `共 ${items.length} 张车端照片` : '车端暂时没有照片';
   }
 
   build() {
-    Column() {
-      Scroll() {
-        Column() {
-          AppHeader({ connected: this.connected, isWide: this.isWide })
-          ConnectionPanel({
-            endpoint: this.endpoint,
-            connected: this.connected,
-            connecting: this.connecting,
-            onEndpointChange: (value: string) => this.endpoint = value,
-            onToggleConnection: () => this.connected ? this.disconnect() : this.connect()
-          })
-          if (this.isWide) {
-            Row({ space: 16 }) {
-              Column({ space: 16 }) {
-                this.CameraSection()
-                this.ServoSection()
-              }
-              .layoutWeight(3)
-              DrivePanel({
-                connected: this.connected,
-                speed: this.speed,
-                activeAction: this.activeAction,
-                onMoveStart: (action: CarAction) => this.beginMove(action),
-                onMoveEnd: (action: CarAction) => this.endMove(action),
-                onEmergencyStop: () => this.emergencyStop(),
-                onSpeedChange: (value: number) => this.speed = value
-              })
-              .layoutWeight(2)
-            }
-            .width('100%')
-            .alignItems(VerticalAlign.Top)
-            .margin({ top: 16 })
-          } else {
-            Column({ space: 16 }) {
-              this.CameraSection()
-              DrivePanel({
-                connected: this.connected,
-                speed: this.speed,
-                activeAction: this.activeAction,
-                onMoveStart: (action: CarAction) => this.beginMove(action),
-                onMoveEnd: (action: CarAction) => this.endMove(action),
-                onEmergencyStop: () => this.emergencyStop(),
-                onSpeedChange: (value: number) => this.speed = value
-              })
-              this.ServoSection()
-            }
-            .width('100%')
-            .margin({ top: 16 })
-          }
-          StatusBar({ connected: this.connected, statusText: this.statusText })
-        }
-        .width('100%')
-        .padding({ left: this.isWide ? 28 : 16, right: this.isWide ? 28 : 16, top: 24, bottom: 28 })
-      }
-      .scrollBar(BarState.Off)
-      .width('100%')
-      .height('100%')
+    if (this.currentScreen === 'connection') {
+      ConnectionScreen({
+        endpoint: this.endpoint,
+        connecting: this.connecting,
+        statusText: this.statusText,
+        logs: this.connectionLogs,
+        onEndpointChange: (value: string) => this.endpoint = value,
+        onConnect: () => this.connect()
+      })
+    } else if (this.currentScreen === 'gallery') {
+      GalleryScreen({
+        items: this.galleryItems,
+        loading: this.galleryLoading,
+        captureBusy: this.captureBusy,
+        message: this.galleryMessage,
+        onBack: () => this.closeGallery(),
+        onRefresh: () => this.loadGallery(),
+        onCapture: () => this.capture()
+      })
+    } else {
+      GameControlScreen({
+        connected: this.connected,
+        cameraReady: this.cameraReady,
+        frameUrl: this.frameUrl,
+        speed: this.speed,
+        activeAction: this.activeAction,
+        statusText: this.statusText,
+        captureBusy: this.captureBusy,
+        verticalAngle: this.verticalAngle,
+        horizontalAngle: this.horizontalAngle,
+        onMoveStart: (action: CarAction) => this.beginMove(action),
+        onMoveEnd: (action: CarAction) => this.endMove(action),
+        onEmergencyStop: () => this.emergencyStop(),
+        onSpeedChange: (value: number) => this.speed = value,
+        onServoStep: (verticalDelta: number, horizontalDelta: number) => {
+          this.stepServo(verticalDelta, horizontalDelta);
+        },
+        onResetServo: () => this.resetServo(),
+        onCapture: () => this.capture(),
+        onOpenGallery: () => this.openGallery(),
+        onDisconnect: () => this.disconnect()
+      })
     }
-    .width('100%')
-    .height('100%')
-    .backgroundColor(AppColors.BACKGROUND)
-    .onAreaChange((oldValue: Area, newValue: Area) => {
-      const width = Number(newValue.width);
-      this.isWide = !Number.isNaN(width) && width >= LayoutConfig.WIDE_BREAKPOINT;
-    })
-  }
-
-  @Builder
-  private CameraSection() {
-    CameraPanel({
-      connected: this.connected,
-      cameraEnabled: this.cameraEnabled,
-      frameUrl: this.frameUrl,
-      captureBusy: this.captureBusy,
-      onToggleCamera: () => this.cameraEnabled ? this.stopCamera() : this.startCamera(),
-      onCapture: () => this.capture(),
-      onResetServo: () => this.resetServo()
-    })
-  }
-
-  @Builder
-  private ServoSection() {
-    ServoPanel({
-      connected: this.connected,
-      verticalAngle: this.verticalAngle,
-      horizontalAngle: this.horizontalAngle,
-      onAnglesChange: (vertical: number, horizontal: number, commit: boolean) => {
-        this.onAnglesChange(vertical, horizontal, commit);
-      }
-    })
   }
 }
