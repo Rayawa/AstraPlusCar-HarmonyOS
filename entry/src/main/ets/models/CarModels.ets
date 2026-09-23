@@ -34,6 +34,17 @@ export interface ApiResult {
   errorCode: number;
   cameraReady?: boolean;
   cameraError?: string;
+  captures?: string[];
+}
+
+export interface CaptureListPayload {
+  ok?: boolean;
+  captures?: string[];
+}
+
+export interface GalleryItem {
+  name: string;
+  url: string;
 }
 
 export interface ApiErrorPayload {
