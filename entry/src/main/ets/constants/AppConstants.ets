@@ -25,8 +25,8 @@ export class CarLimits {
 }
 
 export class NetworkConfig {
-  static readonly CONNECT_TIMEOUT_MS: number = 1800;
-  static readonly READ_TIMEOUT_MS: number = 2500;
+  static readonly CONNECT_TIMEOUT_MS: number = 4000;
+  static readonly READ_TIMEOUT_MS: number = 5000;
   static readonly FRAME_REFRESH_MS: number = 350;
   static readonly DRIVE_KEEP_ALIVE_MS: number = 300;
   static readonly DIRECTION_SWITCH_GRACE_MS: number = 40;
@@ -65,6 +65,8 @@ export class AppColors {
   static readonly CAMERA_BACKGROUND: string = '#050A0F';
   static readonly LIVE_BADGE: string = '#B3071019';
   static readonly STOP_BACKGROUND: string = '#4A2025';
+  static readonly PRIMARY_BLUE: string = '#0A84FF';
+  static readonly SUCCESS: string = '#34C759';
 
   private constructor() {
   }
@@ -77,6 +79,7 @@ export class ApiRoutes {
   static readonly STOP: string = '/api/control/stop';
   static readonly SERVO: string = '/api/control/servo';
   static readonly CAPTURE: string = '/api/camera/capture';
+  static readonly CAPTURES: string = '/api/camera/captures';
 
   private constructor() {
   }

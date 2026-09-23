@@ -4,6 +4,7 @@ import { ApiRoutes, CarDefaults, CarLimits, NetworkConfig } from '../constants/A
 import {
   ApiResult,
   ApiErrorPayload,
+  CaptureListPayload,
   CarAction,
   CarCommand,
   failureResult,
@@ -33,6 +34,10 @@ export class CarApi {
     return `${this.baseUrl}${ApiRoutes.FRAME}?t=${stamp}`;
   }
 
+  captureUrl(filename: string, stamp: number): string {
+    return `${this.baseUrl}${ApiRoutes.CAPTURES}/${encodeURIComponent(filename)}?t=${stamp}`;
+  }
+
   async health(): Promise<ApiResult> {
     return await this.request(ApiRoutes.HEALTH, http.RequestMethod.GET);
   }
@@ -57,6 +62,10 @@ export class CarApi {
     return await this.request(ApiRoutes.CAPTURE, http.RequestMethod.POST, '{}');
   }
 
+  async captures(): Promise<ApiResult> {
+    return await this.request(ApiRoutes.CAPTURES, http.RequestMethod.GET);
+  }
+
   static normalizeEndpoint(value: string): string {
     let normalized = value.trim();
     if (normalized.length === 0) {
@@ -67,6 +76,9 @@ export class CarApi {
     }
     while (normalized.endsWith('/')) {
       normalized = normalized.substring(0, normalized.length - 1);
+    }
+    if (normalized.endsWith(ApiRoutes.HEALTH)) {
+      normalized = normalized.substring(0, normalized.length - ApiRoutes.HEALTH.length);
     }
     const schemeIndex = normalized.indexOf('://');
     const authority = schemeIndex >= 0 ? normalized.substring(schemeIndex + 3) : '';
@@ -101,6 +113,12 @@ export class CarApi {
           }
           result.cameraReady = health.cameraReady === true;
           result.cameraError = health.cameraError ?? '';
+        } else if (path === ApiRoutes.CAPTURES) {
+          const gallery = CarApi.parseCaptureList(response.result.toString());
+          if (gallery.ok !== true || gallery.captures === undefined) {
+            return failureResult('相册响应格式无效', response.responseCode);
+          }
+          result.captures = gallery.captures;
         }
         return result;
       }
@@ -137,6 +155,15 @@ export class CarApi {
   private static parseHealthPayload(value: string): HealthPayload {
     try {
       const payload = JSON.parse(value) as HealthPayload;
+      return payload === null ? {} : payload;
+    } catch (error) {
+      return {};
+    }
+  }
+
+  private static parseCaptureList(value: string): CaptureListPayload {
+    try {
+      const payload = JSON.parse(value) as CaptureListPayload;
       return payload === null ? {} : payload;
     } catch (error) {
       return {};
