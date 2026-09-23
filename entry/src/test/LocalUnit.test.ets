@@ -8,6 +8,10 @@ export default function localUnitTest() {
     it('normalizesEndpoint', 0, () => {
       expect(CarApi.normalizeEndpoint('192.168.8.204:8080/')).assertEqual(CarDefaults.ENDPOINT);
       expect(CarApi.normalizeEndpoint('https://car.local///')).assertEqual('https://car.local');
+      expect(CarApi.normalizeEndpoint('http://192.168.8.204:8080/api/health'))
+        .assertEqual('http://192.168.8.204:8080');
+      expect(CarApi.normalizeEndpoint('http://192.168.8.204:8080/api/health/'))
+        .assertEqual('http://192.168.8.204:8080');
       expect(CarApi.normalizeEndpoint('http://')).assertEqual('');
       expect(CarApi.normalizeEndpoint('bad host')).assertEqual('');
       expect(CarApi.normalizeEndpoint('http://car.local/path')).assertEqual('');

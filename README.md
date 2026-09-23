@@ -1,98 +1,120 @@
-# AstraPlusCar
+# AstraPlusCar HarmonyOS
 
-AstraPlusCar 是一套面向 HarmonyOS 手机、平板和 2in1/PC 的智能小车控制项目。HarmonyOS App 使用 ArkTS 开发，通过局域网 HTTP API 控制 Orange Pi AI Pro 小车，并提供实时画面、车端截图、速度调节、全向移动和双舵机云台控制。
+这是 AstraPlusCar 的 HarmonyOS 手机控制端。它通过 Wi-Fi 局域网连接小车上的 HTTP API，用于控制移动、停车、速度、云台和摄像头。
 
-App 最低兼容 HarmonyOS API 20，默认连接地址为 `http://192.168.8.204:8080`。
+> 如果你完全没有 HarmonyOS 开发经验，先按照下面的“从零开始”安装和连接。想了解 ArkTS 结构、API 协议和扩展方法，再阅读 [HarmonyOS 完整上手教程](docs/HARMONYOS_GUIDE.md)。
 
-## 主要功能
+## 你能用它做什么
 
-- 手机、平板和 2in1/PC 自适应界面
-- 小车地址配置和在线状态检测
-- 按住前进、后退、左转、右转，松手自动停车
-- 左右平移、顺时针/逆时针旋转和紧急停车
-- 25–60 速度调节
-- 智能摄像头画面预览、暂停和截图
-- 云台俯仰、水平角度调节和镜头复位
-- 指令序号校验，防止弱网下旧指令覆盖新指令
-- App 续期控制和车端 0.9 秒失联停车看门狗
-- 摄像头异常自动重连，控制器异常独立提示
+- 连接局域网内的 Orange Pi 小车；
+- 使用左下角摇杆前进、后退、转向和横向移动；
+- 左右平移和原地顺/逆时针旋转；
+- 调整 25–60 的行驶速度；
+- 调整两路舅机角度；
+- 使用 `STOP` 立即发送停车指令；
+- 摄像头就绪后全屏预览画面、保存截图并浏览车端相册。
 
-## 系统组成
+摄像头不可用时，App 仍然可以连接并控制小车。
 
-项目由两部分组成：
+## 安全第一
 
-1. HarmonyOS App：安装在手机、平板或 2in1/PC 上，负责界面和控制指令。
-2. 车端 API：运行在 Orange Pi AI Pro 上，将 HTTP 请求转换为原小车项目的电机、舵机和摄像头操作。
+首次操作请将车轮架空，先使用低速度短按测试，保持可随时断电。
+
+- 方向键是“按住移动，松手停车”。
+- App 进入后台、离开页面或断开连接时会尝试停车。
+- 连续移动请求失败时，App 会进入安全离线状态。
+- 车端还有 0.9 秒失联看门狗，但它不能替代物理断电和现场看护。
+
+## 系统结构
 
 ```text
 HarmonyOS App
-    │  局域网 HTTP（默认端口 8080）
-    ▼
-car_api_server.py
-    ├── Controller ── ESP32 串口 ── 电机和舵机
-    └── OpenCV ────── /dev/video* ── 智能摄像头
+      │  HTTP / Wi-Fi 局域网
+      ▼
+Orange Pi 车端 API
+      ├── ESP32 串口 → 电机和舅机
+      └── 摄像头 → JPEG 画面
 ```
 
-## 项目结构
+App 只发送“前进”“停车”“舅机到某个角度”这类高层指令。电机方向、PWM、串口和引脚定义都由设备端负责。
+
+## 从零开始：安装并连接
+
+### 1. 确认车端已就绪
+
+车端项目位于同级的 `AstraPlusCar-device` 仓库。先按该仓库 README 完成 `astra-plus-car-api` 开机自启部署。
+
+在手机浏览器输入：
 
 ```text
-AstraPlusCar/
-├── AppScope/                         # 应用级配置与资源
-├── entry/                            # HarmonyOS 主模块
-│   └── src/main/
-│       ├── ets/
-│       │   ├── components/           # 连接、摄像头、驾驶、云台等 UI 组件
-│       │   ├── constants/            # 地址、范围、超时、路由、颜色等常量
-│       │   ├── entryability/         # 应用入口 Ability
-│       │   ├── models/               # API 数据模型和控制命令
-│       │   ├── pages/                # 主页面与生命周期编排
-│       │   └── services/             # HTTP API 和局域网路由服务
-│       ├── module.json5              # 模块、设备类型和权限配置
-│       └── resources/                # 字符串、颜色、图标和网络配置
-├── car_server/
-│   ├── car_api_server.py             # Orange Pi 车端 HTTP 服务
-│   ├── tests/test_api_contract.py    # API、看门狗和摄像头离线测试
-│   └── README.md                     # 车端接口与排障细节
-├── build-profile.json5               # SDK、产品和签名配置
-└── README.md
+http://192.168.8.204:8080/api/health
 ```
 
-## 环境要求
+看到包含 `"ok": true` 和 `"apiVersion": "1.3.0"` 的 JSON，说明手机到小车的网络已经打通。
 
-### HarmonyOS 开发端
+如果同时看到：
 
-- DevEco Studio 和 HarmonyOS SDK
-- HarmonyOS API 20 或更高版本的真机
-- 已配置调试签名；换电脑后需要在 DevEco Studio 中重新配置本机签名
-- 手机和小车连接同一个 Wi-Fi/局域网
+```json
+{
+  "cameraReady": false,
+  "cameraError": "camera_disabled"
+}
+```
 
-### Orange Pi 车端
+这是当前纯控制模式的正常结果，不影响底盘和云台。
 
-- Orange Pi AI Pro
-- 已部署原始 `E2E-Sample/Car` 工程
-- 默认 Python 目录：`/home/HwHiAiUser/E2E-Samples-ziyan/src/E2E-Sample/Car/python`
-- Ascend Toolkit、`pyorbbecsdk`、OpenCV、串口及原项目依赖可正常使用
-- 可通过 SSH 登录小车，例如 `ssh root@192.168.8.204`
+### 2. 直接安装已构建的 HAP
 
-## 一、构建 HarmonyOS App
-
-### 使用 DevEco Studio
-
-1. 使用 DevEco Studio 打开本项目根目录。
-2. 等待工程同步完成。
-3. 在签名设置中选择或生成本机调试证书。
-4. 选择 `entry` 模块和 `default` 产品。
-5. 执行 **Build > Build Hap(s)/APP(s) > Build Hap(s)**。
-
-构建产物位于：
+已签名安装包位于：
 
 ```text
 entry/build/default/outputs/default/entry-default-signed.hap
 ```
 
-### 使用命令行
+可以在 DevEco Studio 中连接手机后运行，也可在 `hdc` 可用时执行：
 
-以下为当前 macOS 开发环境的命令；若 DevEco Studio 安装位置不同，请替换 `hvigorw` 路径：
+```bash
+hdc list targets
+hdc install -r entry/build/default/outputs/default/entry-default-signed.hap
+```
+
+`hdc list targets` 没有输出时，说明手机还没有连接到开发环境。
+
+### 3. 在 App 中连接
+
+1. 让手机和小车连接同一 Wi-Fi/局域网。
+2. 打开 App。
+3. 输入基础地址 `http://192.168.8.204:8080`。
+4. 也可直接粘贴完整地址 `http://192.168.8.204:8080/api/health`，App 会自动转换。
+5. 点击“连接并进入操控”。连接页会逐条打印直连、Wi-Fi 备用路由和错误日志。
+6. 连接成功后 App 自动进入竖屏操控界面；看到“已连接 · 控制就绪”或“摄像头未就绪”即可操作。
+
+### 4. 第一次移动测试
+
+1. 车轮架空。
+2. 把速度设为 25。
+3. 点击一次 `STOP`。
+4. 将左下角摇杆短暂向上拖动后立即松手，确认车轮转动并停止。
+5. 依次测试后退、左右转、平移和旋转。
+
+## 从源码构建
+
+### 环境
+
+- DevEco Studio；
+- HarmonyOS SDK API 23 或更高；
+- 已配置 HarmonyOS 调试签名；
+- HarmonyOS API 23+ 手机或平板。
+
+### DevEco Studio
+
+1. 用 DevEco Studio 打开 `AstraPlusCar-HarmonyOS` 目录。
+2. 等待项目同步完成。
+3. 在 Signing Configs 中选择或生成本机调试证书。
+4. 选择 `entry` 模块和 `default` 产品。
+5. 执行 **Build > Build Hap(s)/APP(s) > Build Hap(s)**。
+
+### 命令行
 
 ```bash
 /Users/raychen/Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw \
@@ -103,184 +125,65 @@ entry/build/default/outputs/default/entry-default-signed.hap
   --no-daemon
 ```
 
-连接 HarmonyOS 设备后，可直接通过 DevEco Studio 运行，也可以在 `hdc` 已加入 `PATH` 时安装 HAP：
+换了电脑或 DevEco Studio 安装位置后，需要修改上面的 `hvigorw` 路径，并重新配置签名。
 
-```bash
-hdc install -r entry/build/default/outputs/default/entry-default-signed.hap
-```
+## 界面操作
 
-## 二、部署车端 API
+| 区域 | 用法 |
+| --- | --- |
+| 连接页 | 输入小车 IP 和 8080 端口，并查看每一步连接日志或报错 |
+| 连接/断开 | 执行健康检查、建立或释放网络会话 |
+| 驾驶模式摇杆 | 拖动移动，松手停车；左右大幅拖动为横移，斜上为转向 |
+| `STOP` | 立即发送停车命令 |
+| 驾驶模式速度条 | 调整 25–60 的速度，并提供原地旋转与紧急停车 |
+| 云台模式 | 截图、查看俯仰/水平角度、微调方向、复位或打开相册 |
+| 底部悬浮标签栏 | 使用 HdsTabs 在驾驶模式和云台模式间切换 |
+| 镜头复位 | 恢复默认角度 90° / 65° |
+| 中央画面 | 持续显示车端 JPEG 摄像头画面 |
+| 相册页 | 单独浏览车端 `capture` 目录中的照片，也可继续拍照 |
 
-不要同时运行原来的 `python3 main.py --mode manual` 和 `car_api_server.py`。两个程序会争用 ESP32 串口和摄像头，造成 `camera_open_failed`、`controller_unavailable` 或 `I/O operation on closed file`。
-
-在电脑的项目根目录执行：
-
-```bash
-scp car_server/car_api_server.py \
-  root@192.168.8.204:/home/HwHiAiUser/E2E-Samples-ziyan/src/E2E-Sample/Car/python/
-```
-
-登录小车：
-
-```bash
-ssh root@192.168.8.204
-```
-
-检查是否仍有旧程序占用设备：
-
-```bash
-ps -ef | grep -E '[m]ain.py|[c]ar_api_server.py'
-fuser -v /dev/video* 2>/dev/null
-```
-
-如果存在旧的手动程序或 API 服务，请回到对应终端按 `Ctrl+C` 停止，确保最终只运行一个 `car_api_server.py`。
-
-加载环境并启动服务：
-
-```bash
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-source /home/HwHiAiUser/pyorbbecsdk/env.sh
-cd /home/HwHiAiUser/E2E-Samples-ziyan/src/E2E-Sample/Car/python
-python3 car_api_server.py --host 0.0.0.0 --port 8080
-```
-
-服务启动后会显示：
+## 目录导航
 
 ```text
-Astra Drive API listening on http://0.0.0.0:8080
+AstraPlusCar-HarmonyOS/
+├── AppScope/                         # App 名称、图标和应用级资源
+├── entry/
+│   ├── src/main/module.json5        # 设备类型、Ability 和网络权限
+│   ├── src/main/resources/          # 图标、文字和 HTTP 明文配置
+│   └── src/main/ets/
+│       ├── pages/Index.ets          # 页面状态和业务编排
+│       ├── components/              # 连接屏、游戏操控屏、摇杆和相册 UI
+│       ├── services/CarApi.ets      # HTTP 请求和错误映射
+│       ├── services/LocalNetworkRoute.ets
+│       │                           # 局域网路由备用方案
+│       ├── models/CarModels.ets     # 请求/响应类型
+│       └── constants/AppConstants.ets
+│                                   # 默认 IP、速度、角度、超时和路由
+├── docs/HARMONYOS_GUIDE.md            # 详细上手教程
+└── build-profile.json5               # SDK、产品和签名
 ```
-
-保持该终端运行。需要停止服务时按 `Ctrl+C`。
-
-## 三、验证车端服务
-
-先在小车上执行：
-
-```bash
-curl http://127.0.0.1:8080/api/health
-```
-
-正常响应示例：
-
-```json
-{
-  "ok": true,
-  "apiVersion": "1.1.0",
-  "cameraReady": true,
-  "cameraDevice": 0,
-  "cameraError": ""
-}
-```
-
-然后在手机浏览器访问：
-
-```text
-http://192.168.8.204:8080/api/health
-```
-
-浏览器能显示 JSON，说明手机到小车的局域网链路和 8080 端口已经连通。
-
-## 四、使用 App
-
-1. 确认手机与小车位于同一局域网。
-2. 启动车端 `car_api_server.py`。
-3. 打开 Astra Drive App。
-4. 保持默认地址 `http://192.168.8.204:8080`，或填写小车的实际 IP 和端口。
-5. 点击“连接”。
-6. 连接后可使用方向键、全向移动、速度滑块、云台滑块、镜头复位和截图功能。
-7. 方向按钮需要按住；松开、取消触摸、进入后台或断开连接时都会停车。
-8. 截图保存在小车 Python 工作目录下的 `capture/` 文件夹中。
-
-摄像头或云台未就绪时，App 会保留已经建立的网络连接并单独显示错误，不会将单项硬件故障误判为手机网络断开。
-
-## 常用启动参数
-
-```bash
-python3 car_api_server.py \
-  --host 0.0.0.0 \
-  --port 8080 \
-  --camera 0 \
-  --capture-dir ./capture
-```
-
-| 参数 | 默认值 | 说明 |
-| --- | --- | --- |
-| `--host` | `0.0.0.0` | 监听地址；局域网访问需监听所有网卡 |
-| `--port` | `8080` | HTTP 服务端口 |
-| `--camera` | `0` | OpenCV 摄像头编号 |
-| `--capture-dir` | 当前目录下的 `capture/` | 截图保存目录 |
-
-如果摄像头不是 `/dev/video0`，先执行 `ls -l /dev/video*` 查看设备，再尝试 `--camera 1` 等实际编号。
-
-## API 概览
-
-| 方法 | 路径 | 功能 |
-| --- | --- | --- |
-| `GET` | `/api/health` | 查询服务版本和摄像头状态 |
-| `GET` | `/api/camera/frame` | 获取最新 JPEG 画面 |
-| `POST` | `/api/control/move` | 前后、转向、平移和旋转 |
-| `POST` | `/api/control/stop` | 停车 |
-| `POST` | `/api/control/servo` | 调整双舵机角度 |
-| `POST` | `/api/camera/capture` | 将当前画面保存到车端 |
-
-完整参数和维护约定参见 [car_server/README.md](car_server/README.md)。
 
 ## 常见问题
 
-### 手机浏览器显示 `ERR_CONNECTION_REFUSED`
+| App 提示 | 含义与处理 |
+| --- | --- |
+| 车端地址格式无效 | 只填 `http://IP:端口`，或完整 `/api/health` 地址 |
+| 连接被拒绝 | 车端 8080 没有监听，检查 systemd 服务 |
+| 连接超时 | 检查 IP、Wi-Fi 和手机浏览器的 `/api/health` |
+| 系统阻止明文 HTTP | 确认安装的是最新 HAP，并检查 `network_config.json` |
+| 健康检查响应格式无效 | 车端版本太旧，应返回 API `1.3.0` 和 `ok: true` |
+| 已连接，摄像头未就绪 | 底盘控制可用；当前可能是 `--no-camera` 模式 |
+| 车端控制器不可用 | ESP32 串口未连接、权限不足或被其他进程占用 |
+| 连续移动指令失败 | App 已进入安全离线，先检查车端再重连 |
 
-表示小车的 8080 端口没有进程监听。检查：
+## 开发者验证
 
-```bash
-ss -lntp | grep 8080
-ps -ef | grep '[c]ar_api_server.py'
-```
+HarmonyOS 侧的主要离线验收是 HAP 成功构建。本地测试位于 `entry/src/test/LocalUnit.test.ets`，包含地址标准化和基本协议常量检查。
 
-如果没有输出，请按“部署车端 API”一节重新启动服务。
+离线构建不代表已经在真实手机、Wi-Fi、车端、串口或电机上完成联调。
 
-### `cameraReady` 为 `false`
+## 相关文档
 
-网络连接已经成功，但摄像头尚未打开。检查设备和占用进程：
-
-```bash
-ls -l /dev/video*
-fuser -v /dev/video* 2>/dev/null
-```
-
-确认没有 `main.py --mode manual` 占用摄像头，并尝试正确的 `--camera` 编号。
-
-### App 显示“车端控制器不可用”
-
-检查是否同时运行了多个小车程序，并确认 ESP32 串口存在：
-
-```bash
-ps -ef | grep -E '[m]ain.py|[c]ar_api_server.py'
-ls -l /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
-```
-
-停止重复进程后重启 API 服务。
-
-### 健康检查成功但 App 仍异常
-
-确认 `/api/health` 返回的 `apiVersion` 为 `1.1.0`，并重新安装最新构建的 signed HAP。旧车端脚本的健康响应不包含 `apiVersion`。
-
-## 离线验证
-
-以下操作不需要连接小车：
-
-```bash
-python3 -m py_compile \
-  car_server/car_api_server.py \
-  car_server/tests/test_api_contract.py
-
-python3 -m unittest discover -s car_server/tests -v
-```
-
-ArkTS 侧以 HAP 全量编译和打包成功作为离线验收依据。
-
-## 安全说明
-
-- API 当前没有身份认证，只应在可信的私有局域网中使用。
-- `--host 0.0.0.0` 会让同一网络中的其他设备访问该端口，不要直接暴露到公网。
-- 启动、停止或调试服务前，应确保小车周围安全并可随时断电。
-- App、网络或手机异常时，车端看门狗会在约 0.9 秒未收到续期后停车，但不能替代物理急停和现场安全措施。
+- [HarmonyOS 完整上手教程](docs/HARMONYOS_GUIDE.md)
+- 车端仓库：`AstraPlusCar-device`
+- 车端部署文档：`AstraPlusCar-device/deploy/README.md`
