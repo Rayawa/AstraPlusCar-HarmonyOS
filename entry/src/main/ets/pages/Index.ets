@@ -31,6 +31,7 @@ struct Index {
   @State cameraStatus: string = 'waiting';
   @State lidarText: string = '等待雷达数据';
   @State speed: number = 40;
+  @State sliderSpeed: number = 40;
   @State activeKey: string = '';
   @State captureBusy: boolean = false;
 
@@ -117,7 +118,10 @@ struct Index {
 
   private applyStatus(status: PhoneStatus): void {
     this.speed = status.speed;
-    this.speedDesired = status.speed;
+    if (this.speedTimer < 0 && !this.speedBusy) {
+      this.speedDesired = status.speed;
+      this.sliderSpeed = status.speed;
+    }
     this.cameraStatus = status.camera.status;
     this.lidarText = JSON.stringify(status.lidar, null, 2);
   }
@@ -227,13 +231,14 @@ struct Index {
       const result = await this.api.command(session, ++this.serial, this.nextId(), key);
       this.speed = result.speed;
       this.speedDesired = result.speed;
+      this.sliderSpeed = result.speed;
       if (this.activeKey === 'z') { this.stopRenewTimer(); this.activeKey = ''; }
     } catch (error) { this.message = `调速失败：${(error as Error).message}`; }
   }
 
   private changeSpeed(value: number): void {
     this.speedDesired = Math.round(value);
-    this.speed = this.speedDesired;
+    this.sliderSpeed = this.speedDesired;
     if (this.speedTimer >= 0) { clearTimeout(this.speedTimer); }
     this.speedTimer = setTimeout(() => { this.speedTimer = -1; this.flushSpeed(); }, 120);
   }
@@ -242,16 +247,23 @@ struct Index {
     if (!this.connected || this.speedBusy) { return; }
     this.speedBusy = true;
     const target = this.speedDesired;
+    let accepted = false;
     try {
       let session = this.sessionId;
       if (!session) { session = (await this.api.session()).sessionId; this.sessionId = session; }
       const result = await this.api.speed(session, ++this.serial, this.nextId(), target);
       this.speed = result.speed;
+      accepted = true;
+      if (this.speedDesired === target) { this.sliderSpeed = result.speed; }
       if (this.activeKey === 'z') { this.stopRenewTimer(); this.activeKey = ''; }
-    } catch (error) { this.message = `调速失败：${(error as Error).message}`; }
+    } catch (error) {
+      this.message = `调速失败：${(error as Error).message}`;
+      this.speedDesired = this.speed;
+      this.sliderSpeed = this.speed;
+    }
     finally {
       this.speedBusy = false;
-      if (this.connected && this.speedDesired !== target) { this.flushSpeed(); }
+      if (this.connected && accepted && this.speedDesired !== target) { this.flushSpeed(); }
     }
   }
 
@@ -323,7 +335,7 @@ struct Index {
           Text(this.lidarText).fontSize(13).width('100%')
             .padding(10).backgroundColor('#20313E')
           Text(`速度 ${this.speed}`).fontSize(17)
-          Slider({ value: this.speed, min: 0, max: 100, step: 1, style: SliderStyle.OutSet })
+          Slider({ value: this.sliderSpeed, min: 0, max: 100, step: 1, style: SliderStyle.OutSet })
             .onChange((value: number) => this.changeSpeed(value))
           Row({ space: 8 }) {
             Button('↑ +20').onClick(() => this.stepSpeed('up'))
@@ -334,7 +346,10 @@ struct Index {
           Row({ space: 8 }) { this.HoldKey('A 左转', 'a'); this.HoldKey('S 后退', 's'); this.HoldKey('D 右转', 'd'); }
           Row({ space: 8 }) { this.HoldKey('← 左移', 'left'); this.HoldKey('→ 右移', 'right'); }
           Button('STOP · 停车').width('100%').height(56)
-            .backgroundColor('#B82F32').onClick(() => this.emergencyStop())
+            .backgroundColor('#B82F32')
+            .onTouch((event: TouchEvent) => {
+              if (event.type === TouchType.Down) { this.emergencyStop(); }
+            })
         }
         Text(this.message).fontSize(13).width('100%')
       }
