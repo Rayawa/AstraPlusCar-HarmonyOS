@@ -295,9 +295,9 @@ struct Index {
   @Builder
   private HoldKey(label: string, key: string) {
     Button(label)
-      .width(74).height(52)
+      .width(92).height(44)
       .backgroundColor(this.activeKey === key ? '#1F9B72' : '#293B4A')
-      .fontSize(17)
+      .fontSize(15)
       .enabled(this.connected)
       .onTouch((event: TouchEvent) => {
         if (event.type === TouchType.Down) { this.beginAction(key, true); }
@@ -307,8 +307,8 @@ struct Index {
 
   build() {
     Scroll() {
-      Column({ space: 13 }) {
-        Text('AstraPlusCar · 手机手动模式').fontSize(21).fontWeight(FontWeight.Bold)
+      Column({ space: 7 }) {
+        Text('AstraPlusCar · 手机手动模式').fontSize(21).fontWeight(FontWeight.Bold).fontColor('#FFFFFF')
         if (!this.connected) {
           TextInput({ text: this.endpoint, placeholder: 'http://192.168.149.1:8080' })
             .onChange((value: string) => this.endpoint = value)
@@ -317,10 +317,10 @@ struct Index {
         } else {
           Button('断开连接').onClick(() => this.disconnect())
           if (this.cameraStatus === 'live') {
-            Image(this.frameUrl).width('100%').height(210).objectFit(ImageFit.Contain)
+            Image(this.frameUrl).width('100%').height(150).objectFit(ImageFit.Contain)
               .backgroundColor('#101820')
           } else {
-            Text(`相机状态：${this.cameraStatus}`).height(210)
+            Text(`相机状态：${this.cameraStatus}`).height(150).fontColor('#FFFFFF')
           }
           Row({ space: 12 }) {
             SaveButton({ text: SaveDescription.SAVE_IMAGE, buttonType: ButtonType.Capsule })
@@ -329,29 +329,33 @@ struct Index {
                 if (result === SaveButtonOnClickResult.SUCCESS) { this.capture(); }
                 else { this.message = '未获得保存到相册的授权'; }
               })
-            Text(this.captureBusy ? '保存中…' : '截图保存到车端与手机')
+            Text(this.captureBusy ? '保存中…' : '截图保存到车端与手机').fontColor('#FFFFFF')
           }
-          Text('雷达 JSON').fontSize(16).fontWeight(FontWeight.Bold)
-          Text(this.lidarText).fontSize(13).width('100%')
-            .padding(10).backgroundColor('#20313E')
-          Text(`速度 ${this.speed}`).fontSize(17)
+          Text('雷达 JSON').fontSize(16).fontWeight(FontWeight.Bold).fontColor('#FFFFFF')
+          Scroll() {
+            Text(this.lidarText).fontSize(13).fontColor('#FFFFFF').width('100%')
+              .padding(10)
+          }
+          .width('100%').height(70).backgroundColor('#20313E')
+          Text(`速度 ${this.speed}`).fontSize(17).fontColor('#FFFFFF')
           Slider({ value: this.sliderSpeed, min: 0, max: 100, step: 1, style: SliderStyle.OutSet })
+            .height(38)
             .onChange((value: number) => this.changeSpeed(value))
           Row({ space: 8 }) {
-            Button('↑ +20').onClick(() => this.stepSpeed('up'))
-            Button('↓ -20').onClick(() => this.stepSpeed('down'))
-            Button('Z 掉头').onClick(() => this.beginAction('z', false))
+            Button('↑ +20').height(44).onClick(() => this.stepSpeed('up'))
+            Button('↓ -20').height(44).onClick(() => this.stepSpeed('down'))
+            Button('Z 掉头').height(44).onClick(() => this.beginAction('z', false))
           }
           Row({ space: 8 }) { this.HoldKey('Q 左旋', 'q'); this.HoldKey('W 前进', 'w'); this.HoldKey('E 右旋', 'e'); }
           Row({ space: 8 }) { this.HoldKey('A 左转', 'a'); this.HoldKey('S 后退', 's'); this.HoldKey('D 右转', 'd'); }
           Row({ space: 8 }) { this.HoldKey('← 左移', 'left'); this.HoldKey('→ 右移', 'right'); }
-          Button('STOP · 停车').width('100%').height(56)
+          Button('STOP · 停车').width('100%').height(48)
             .backgroundColor('#B82F32')
             .onTouch((event: TouchEvent) => {
               if (event.type === TouchType.Down) { this.emergencyStop(); }
             })
         }
-        Text(this.message).fontSize(13).width('100%')
+        Text(this.message).fontSize(13).fontColor('#FFFFFF').width('100%')
       }
       .width('100%').padding(16).alignItems(HorizontalAlign.Center)
     }
