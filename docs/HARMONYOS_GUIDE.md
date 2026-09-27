@@ -1,5 +1,7 @@
 # AstraPlusCar HarmonyOS 完整上手教程
 
+> **旧版教程，仅供历史代码参考。** 本文的 `CarApi.ets`、`car_api_server.py`、`/api/health`、API 23 和云台控制描述不适用于当前 phone 模式。当前 App 的运行方式见仓库 [README](../README.md)，车端接口与部署见 [Phone API](../../AstraPlusCar-device/docs/PHONE_API.md)。
+
 本文面向第一次使用 ArkTS/ArkUI 的学生。阅读前不需要了解 Android、React 或车辆控制。
 
 完成后，你应该能够：
