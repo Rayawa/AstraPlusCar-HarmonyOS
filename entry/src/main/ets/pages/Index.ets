@@ -1,5 +1,13 @@
-import { photoAccessHelper } from '@kit.MediaLibraryKit';
-import { fileIo } from '@kit.CoreFileKit';
+import { common } from '@kit.AbilityKit';
+import { LengthMetrics } from '@kit.ArkUI';
+import { HdsNavigation } from '@hms.hds.hdsBaseComponent';
+import { hdsMaterial, HdsNavigationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
+import { CaptureStore, CaptureItem } from '../services/CaptureStore';
+import { ConsoleLine } from '../models/ConsoleLine';
+import { ConnectionIndicators } from '../components/ConnectionIndicators';
+import { DriveControls } from '../components/DriveControls';
+import { ConsoleDestination } from '../components/ConsoleDestination';
+import { CaptureGallery } from '../components/CaptureGallery';
 import { PhoneApi, PhoneStatus, PhoneSession, PhoneResult } from '../services/PhoneApi';
 import { LocalNetworkRoute } from '../services/LocalNetworkRoute';
 
@@ -8,12 +16,15 @@ import { LocalNetworkRoute } from '../services/LocalNetworkRoute';
 struct Index {
   private readonly api: PhoneApi = new PhoneApi();
   private readonly networkRoute: LocalNetworkRoute = new LocalNetworkRoute();
+  private readonly pageStack: NavPathStack = new NavPathStack();
+  private captureStore: CaptureStore | null = null;
   private statusTimer: number = -1;
   private frameTimer: number = -1;
   private renewTimer: number = -1;
   private speedTimer: number = -1;
   private controlGeneration: number = 0;
   private serial: number = 0;
+  private logSequence: number = 0;
   private sessionId: string = '';
   private commandId: string = '';
   private pressedKey: string = '';
@@ -26,7 +37,7 @@ struct Index {
   @State endpoint: string = 'http://192.168.149.1:8080';
   @State connected: boolean = false;
   @State connecting: boolean = false;
-  @State message: string = '连接小车 Wi-Fi 后输入车端地址';
+  @State @Watch('recordMessage') message: string = '连接小车 Wi-Fi 后输入车端地址';
   @State frameUrl: string = '';
   @State cameraStatus: string = 'waiting';
   @State lidarText: string = '等待雷达数据';
@@ -34,12 +45,26 @@ struct Index {
   @State sliderSpeed: number = 40;
   @State activeKey: string = '';
   @State captureBusy: boolean = false;
+  @State lidarReady: boolean = false;
+  @State logs: ConsoleLine[] = [];
+  @State captures: CaptureItem[] = [];
+  @State showConnection: boolean = false;
 
   aboutToAppear(): void {
     this.disposed = false;
+    this.captureStore = new CaptureStore(this.getUIContext().getHostContext() as common.UIAbilityContext);
+    this.refreshCaptures();
+    if (this.logs.length === 0) { this.addLog('INFO', '等待小车连接'); }
   }
 
   aboutToDisappear(): void {
+    if (this.pageStack.size() > 0) {
+      // Leaving the driving surface must release movement, while diagnostics keep polling.
+      ++this.controlGeneration;
+      this.pressedKey = '';
+      this.stopCurrent();
+      return;
+    }
     this.disposed = true;
     this.disconnect();
   }
@@ -125,6 +150,8 @@ struct Index {
     }
     this.cameraStatus = status.camera.status;
     this.lidarText = JSON.stringify(status.lidar, null, 2);
+    this.lidarReady = status.lidar.status === 'live';
+    this.addLog('RECV', `速度 ${status.speed} · 雷达 ${status.lidar.status} · 视频 ${status.camera.status}`);
   }
 
   private stopRenewTimer(): void {
@@ -154,6 +181,7 @@ struct Index {
     this.connected = false;
     this.connecting = false;
     this.cameraStatus = 'unavailable';
+    this.lidarReady = false;
     this.frameUrl = '';
     this.stopCurrent();
     this.networkRoute.release();
@@ -296,98 +324,168 @@ struct Index {
     }
   }
 
+  private addLog(type: string, content: string): void {
+    const now = new Date();
+    const pad = (value: number): string => value.toString().padStart(2, '0');
+    const time = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+    const line: ConsoleLine = { id: `${Date.now()}-${++this.logSequence}`, time: time, type: type, content: content };
+    this.logs = [...this.logs.slice(-199), line];
+  }
+
+  private recordMessage(): void {
+    this.addLog(this.message.includes('失败') || this.message.includes('中断') ? 'ERR' : 'INFO', this.message);
+  }
+
+  private refreshCaptures(): void {
+    if (!this.captureStore) { return; }
+    try { this.captures = this.captureStore.list(); }
+    catch (error) { this.message = `读取图库失败：${(error as Error).message}`; }
+  }
+
+  private removeCapture(name: string): void {
+    if (!this.captureStore) { return; }
+    try {
+      this.captureStore.remove(name);
+      this.refreshCaptures();
+      this.message = '截图已删除';
+    } catch (error) { this.message = `删除失败：${(error as Error).message}`; }
+  }
+
   private async capture(): Promise<void> {
-    if (!this.connected || this.captureBusy) { return; }
+    if (!this.connected || this.captureBusy || !this.captureStore) { return; }
     this.captureBusy = true;
     try {
       const capture = await this.api.capture();
-      this.message = `车端已保存 ${capture.captureId}，正在保存到手机…`;
+      this.message = `车端已保存 ${capture.captureId}，正在下载…`;
       const jpeg = await this.api.downloadCapture(capture.captureId);
-      const helper = photoAccessHelper.getPhotoAccessHelper(getContext(this));
-      const uri = await helper.createAsset(photoAccessHelper.PhotoType.IMAGE, 'jpg',
-        { title: `AstraPlusCar-${Date.now()}` });
-      const file = fileIo.openSync(uri, fileIo.OpenMode.WRITE_ONLY);
-      try {
-        let written = 0;
-        while (written < jpeg.byteLength) {
-          const count = fileIo.writeSync(file.fd, jpeg.slice(written));
-          if (count <= 0) { throw new Error('手机相册写入失败'); }
-          written += count;
-        }
-      }
-      finally { fileIo.closeSync(file); }
-      this.message = '截图已保存到车端和手机相册';
-    } catch (error) { this.message = `截图或手机保存失败：${(error as Error).message}`; }
+      this.captureStore.save(jpeg);
+      this.refreshCaptures();
+      this.message = '截图已保存到车端和应用图库';
+    } catch (error) { this.message = `截图保存失败：${(error as Error).message}`; }
     finally { this.captureBusy = false; }
   }
 
   @Builder
-  private HoldKey(label: string, key: string) {
-    Button(label)
-      .width(92).height(44)
-      .backgroundColor(this.activeKey === key ? '#1F9B72' : '#293B4A')
-      .fontSize(15)
-      .enabled(this.connected)
-      .onTouch((event: TouchEvent) => {
-        if (event.type === TouchType.Down) { this.beginAction(key, true); }
-        else if (event.type === TouchType.Up || event.type === TouchType.Cancel) { this.endAction(key); }
-      })
+  private ConnectionSheet() {
+    Column({ space: 12 }) {
+      ConnectionIndicators({ connected: this.connected, cameraReady: this.cameraStatus === 'live',
+        lidarReady: this.lidarReady })
+      Row({ space: 8 }) {
+        Column({ space: 6 }) {
+          Text('视频').fontSize(13).fontWeight(FontWeight.Bold).fontColor('#364B60')
+          Stack({ alignContent: Alignment.Center }) {
+            if (this.connected && this.cameraStatus === 'live' && this.frameUrl.length > 0) {
+              Image(this.frameUrl).width('100%').height('100%').objectFit(ImageFit.Contain)
+            } else {
+              Text('暂无预览').fontSize(12).fontColor('#8BA396')
+            }
+          }.width('100%').layoutWeight(1).backgroundColor('#161B26').borderRadius(14)
+        }.layoutWeight(1).height(220)
+        Column({ space: 6 }) {
+          Text('雷达 JSON').fontSize(13).fontWeight(FontWeight.Bold).fontColor('#364B60')
+          Scroll() {
+            Text(this.lidarText).fontSize(10).fontFamily('monospace').fontColor('#F2F6FA')
+              .width('100%').padding(8)
+          }.width('100%').layoutWeight(1).backgroundColor('#161B26').borderRadius(14)
+        }.layoutWeight(1).height(220)
+      }.width('100%')
+      TextInput({ text: this.endpoint, placeholder: 'http://192.168.149.1:8080' })
+        .width('100%').height(48).backgroundColor('#E1EDFA').borderRadius(13)
+        .enabled(!this.connected && !this.connecting)
+        .onChange((value: string) => this.endpoint = value)
+      Button(this.connected ? '断开连接' : (this.connecting ? '连接中…' : '测试链接并连接'))
+        .width('100%').height(48).fontColor('#FFFFFF')
+        .backgroundColor(this.connected ? '#FF3B30' : '#41BA41').borderRadius(14)
+        .enabled(!this.connecting)
+        .onClick(() => { if (this.connected) { this.disconnect(); } else { this.connect(); } })
+      Text(this.message).fontSize(12).fontColor('#596A7F').maxLines(2)
+      Blank()
+    }
+    .width('100%').height('100%').padding({ left: 16, right: 16, top: 14, bottom: 16 })
+    .backgroundColor('#F2F6FA')
+  }
+
+  @Builder
+  private PageMap(name: string) {
+    if (name === 'Console') {
+      ConsoleDestination({ lines: this.logs, onBack: () => this.pageStack.pop() })
+    } else if (name === 'Gallery') {
+      CaptureGallery({ items: this.captures, onBack: () => this.pageStack.pop(),
+        onRemove: (itemName: string) => this.removeCapture(itemName) })
+    }
   }
 
   build() {
-    Scroll() {
+    HdsNavigation(this.pageStack) {
       Column({ space: 7 }) {
-        Text('AstraPlusCar · 手机手动模式').fontSize(21).fontWeight(FontWeight.Bold).fontColor('#FFFFFF')
-        if (!this.connected) {
-          TextInput({ text: this.endpoint, placeholder: 'http://192.168.149.1:8080' })
-            .onChange((value: string) => this.endpoint = value)
-          Button(this.connecting ? '连接中…' : '连接小车')
-            .enabled(!this.connecting).onClick(() => this.connect())
-        } else {
-          Button('断开连接').onClick(() => this.disconnect())
-          if (this.cameraStatus === 'live') {
-            Image(this.frameUrl).width('100%').height(150).objectFit(ImageFit.Contain)
-              .backgroundColor('#101820')
+        ConnectionIndicators({ connected: this.connected, cameraReady: this.cameraStatus === 'live',
+          lidarReady: this.lidarReady, onOpen: () => this.showConnection = true })
+        Stack({ alignContent: Alignment.Center }) {
+          if (this.connected && this.cameraStatus === 'live' && this.frameUrl.length > 0) {
+            Image(this.frameUrl).width('100%').height('100%').objectFit(ImageFit.Contain)
           } else {
-            Text(`相机状态：${this.cameraStatus}`).height(150).fontColor('#FFFFFF')
+            Column({ space: 5 }) {
+              Text('监看画面').fontSize(17).fontWeight(FontWeight.Bold).fontColor('#DBE8DC')
+              Text(this.connected ? '摄像头暂不可用' : '连接小车后显示实时画面')
+                .fontSize(12).fontColor('#A5B9A9')
+            }
           }
-          Row({ space: 12 }) {
-            SaveButton({ text: SaveDescription.SAVE_IMAGE, buttonType: ButtonType.Capsule })
-              .enabled(!this.captureBusy)
-              .onClick((event: ClickEvent, result: SaveButtonOnClickResult) => {
-                if (result === SaveButtonOnClickResult.SUCCESS) { this.capture(); }
-                else { this.message = '未获得保存到相册的授权'; }
-              })
-            Text(this.captureBusy ? '保存中…' : '截图保存到车端与手机').fontColor('#FFFFFF')
-          }
-          Text('雷达 JSON').fontSize(16).fontWeight(FontWeight.Bold).fontColor('#FFFFFF')
-          Scroll() {
-            Text(this.lidarText).fontSize(13).fontColor('#FFFFFF').width('100%')
-              .padding(10)
-          }
-          .width('100%').height(70).backgroundColor('#20313E')
-          Text(`速度 ${this.speed}`).fontSize(17).fontColor('#FFFFFF')
-          Slider({ value: this.sliderSpeed, min: 0, max: 100, step: 1, style: SliderStyle.OutSet })
-            .height(38)
-            .onChange((value: number) => this.changeSpeed(value))
-          Row({ space: 8 }) {
-            Button('↑ +20').height(44).onClick(() => this.stepSpeed('up'))
-            Button('↓ -20').height(44).onClick(() => this.stepSpeed('down'))
-            Button('Z 掉头').height(44).onClick(() => this.beginAction('z', false))
-          }
-          Row({ space: 8 }) { this.HoldKey('Q 左旋', 'q'); this.HoldKey('W 前进', 'w'); this.HoldKey('E 右旋', 'e'); }
-          Row({ space: 8 }) { this.HoldKey('A 左转', 'a'); this.HoldKey('S 后退', 's'); this.HoldKey('D 右转', 'd'); }
-          Row({ space: 8 }) { this.HoldKey('← 左移', 'left'); this.HoldKey('→ 右移', 'right'); }
-          Button('STOP · 停车').width('100%').height(48)
-            .backgroundColor('#B82F32')
-            .onTouch((event: TouchEvent) => {
-              if (event.type === TouchType.Down) { this.emergencyStop(); }
-            })
+          Text(this.captureBusy ? '保存中…' : '轻触截图')
+            .fontSize(10).fontColor('#FFFFFF').padding(7).backgroundColor('#77000000')
+            .borderRadius(10).position({ x: 10, y: 10 })
         }
-        Text(this.message).fontSize(13).fontColor('#FFFFFF').width('100%')
+        .width('100%').layoutWeight(1).backgroundColor('#161B26').borderRadius(18)
+        .clip(true).onClick(() => this.capture())
+        DriveControls({ connected: this.connected, activeKey: this.activeKey,
+          onStart: (key: string) => this.beginAction(key, true),
+          onEnd: (key: string) => this.endAction(key),
+          onStop: () => this.emergencyStop() })
+        Row({ space: 8 }) {
+          Text(`速度 ${this.sliderSpeed}`).fontSize(13).fontWeight(FontWeight.Bold).fontColor('#364B60')
+          Slider({ value: this.sliderSpeed, min: 0, max: 100, step: 1, style: SliderStyle.OutSet })
+            .layoutWeight(1).selectedColor('#41BA41')
+            .enabled(this.connected).onChange((value: number) => this.changeSpeed(value))
+        }.width('100%').height(39)
+        Text(this.message).fontSize(11).fontColor('#596A7F').width('100%')
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
       }
-      .width('100%').padding(16).alignItems(HorizontalAlign.Center)
+      .width('100%').height('100%')
+      .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+      .backgroundColor('#F2F6FA')
     }
-    .width('100%').height('100%').backgroundColor('#101D28')
+    .mode(NavigationMode.Stack)
+    .navDestination(this.PageMap)
+    .titleMode(HdsNavigationTitleMode.MINI)
+    .hideBackButton(true)
+    .width('100%').height(LayoutPolicy.matchParent).background('#F2F6FA')
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
+    .titleBar({
+      enableComponentSafeArea: true,
+      style: {
+        scrollEffectOpts: { enableScrollEffect: true, scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
+          blurEffectiveStartOffset: LengthMetrics.vp(0), blurEffectiveEndOffset: LengthMetrics.vp(20) },
+        systemMaterialEffect: { materialType: hdsMaterial.MaterialType.IMMERSIVE,
+          materialLevel: hdsMaterial.MaterialLevel.EXQUISITE },
+        originalStyle: { backgroundStyle: { backgroundColor: '#F2F6FA' },
+          contentStyle: { titleStyle: { mainTitleColor: '#202F42' },
+            menuStyle: { backgroundColor: '#E1EDFA', iconColor: '#202F42' } } },
+        scrollEffectStyle: { backgroundStyle: { backgroundColor: '#F2F6FA' },
+          contentStyle: { titleStyle: { mainTitleColor: '#202F42' },
+            menuStyle: { backgroundColor: '#E1EDFA', iconColor: '#202F42' } } }
+      },
+      content: {
+        title: { mainTitle: 'Astra Plus Drive' },
+        menu: { value: [
+          { content: { label: '控制台', icon: $r('sys.symbol.code_square'), isEnabled: true,
+            action: () => this.pageStack.pushPathByName('Console', null) } },
+          { content: { label: '图库', icon: $r('sys.symbol.picture'), isEnabled: true,
+            action: () => { this.refreshCaptures(); this.pageStack.pushPathByName('Gallery', null); } } }
+        ] }
+      }
+    })
+    .bindSheet($$this.showConnection, this.ConnectionSheet(), {
+      height: SheetSize.LARGE, showClose: true, title: { title: '连接小车' },
+      backgroundColor: '#F2F6FA', onDisappear: () => this.showConnection = false
+    })
   }
 }
