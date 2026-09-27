@@ -104,6 +104,7 @@ struct Index {
       if (status.mode !== 'phone') { throw new Error('车端模式已改变'); }
       this.applyStatus(status);
       if (this.activeKey === 'z' && !status.moving) {
+        ++this.controlGeneration;
         this.stopRenewTimer();
         this.activeKey = '';
         this.sessionId = '';
@@ -202,6 +203,24 @@ struct Index {
     try {
       await this.api.renew(this.sessionId, this.commandId);
     } catch (error) {
+      if (current !== this.controlGeneration) { return; }
+      if (this.activeKey === 'z') {
+        try {
+          const status = await this.api.status();
+          if (this.connected && current === this.controlGeneration && status.mode === 'phone' && !status.moving) {
+            ++this.controlGeneration;
+            this.stopRenewTimer();
+            this.sessionId = '';
+            this.commandId = '';
+            this.activeKey = '';
+            this.applyStatus(status);
+            this.message = '掉头已结束';
+            return;
+          }
+        } catch (statusError) {
+          // Fall through to the ordinary connection-loss stop.
+        }
+      }
       if (current === this.controlGeneration) { this.connectionLost('运动续期失败，已停止控制'); }
     } finally {
       this.renewing = false;
@@ -232,7 +251,12 @@ struct Index {
       this.speed = result.speed;
       this.speedDesired = result.speed;
       this.sliderSpeed = result.speed;
-      if (this.activeKey === 'z') { this.stopRenewTimer(); this.activeKey = ''; }
+      if (this.activeKey === 'z') {
+        ++this.controlGeneration;
+        this.stopRenewTimer();
+        this.activeKey = '';
+        this.commandId = '';
+      }
     } catch (error) { this.message = `调速失败：${(error as Error).message}`; }
   }
 
@@ -255,7 +279,12 @@ struct Index {
       this.speed = result.speed;
       accepted = true;
       if (this.speedDesired === target) { this.sliderSpeed = result.speed; }
-      if (this.activeKey === 'z') { this.stopRenewTimer(); this.activeKey = ''; }
+      if (this.activeKey === 'z') {
+        ++this.controlGeneration;
+        this.stopRenewTimer();
+        this.activeKey = '';
+        this.commandId = '';
+      }
     } catch (error) {
       this.message = `调速失败：${(error as Error).message}`;
       this.speedDesired = this.speed;
