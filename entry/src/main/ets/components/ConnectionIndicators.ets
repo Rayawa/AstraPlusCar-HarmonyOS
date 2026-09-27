@@ -44,12 +44,20 @@ export struct ConnectionIndicators {
   @Prop lidarReady: boolean = false;
   onOpen: () => void = () => {};
 
+  private branchPath(): string {
+    const p = (value: number): string => this.getUIContext().vp2px(value).toFixed(2);
+    return `M ${p(0)} ${p(22)} H ${p(8)} V ${p(10)} H ${p(18)} ` +
+      `M ${p(8)} ${p(22)} V ${p(34)} H ${p(18)}`;
+  }
+
   build() {
-    Row({ space: 5 }) {
+    Row({ space: 0 }) {
       Row() {
         ConnectionChip({ label: '小车', ready: this.connected, car: true, onOpen: () => this.onOpen() })
       }.layoutWeight(1)
-      Text('›').fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_secondary'))
+      Path({ width: 18, height: 44, commands: this.branchPath() })
+        .fill(Color.Transparent).stroke($r('app.color.text_secondary')).strokeWidth(1.5)
+        .width(18).height(44).hitTestBehavior(HitTestMode.None)
       Column({ space: 4 }) {
         Row({ space: 4 }) {
           Row() {
@@ -70,6 +78,8 @@ export struct ConnectionIndicators {
           }.layoutWeight(1)
         }.width('100%')
       }.layoutWeight(2)
-    }.width('100%')
+    }.width('100%').padding(4)
+      .backgroundColor($r('app.color.panel_background'))
+      .border({ width: 1, color: $r('app.color.control_border') }).borderRadius(15)
   }
 }

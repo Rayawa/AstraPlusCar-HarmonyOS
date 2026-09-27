@@ -1,7 +1,7 @@
 import { common } from '@kit.AbilityKit';
-import { LengthMetrics } from '@kit.ArkUI';
+import { curves, LengthMetrics } from '@kit.ArkUI';
 import { HdsNavigation } from '@hms.hds.hdsBaseComponent';
-import { hdsMaterial, HdsNavigationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
+import { hdsEffect, hdsMaterial, HdsNavigationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
 import { CaptureStore, CaptureItem } from '../services/CaptureStore';
 import { ConnectionIndicators } from '../components/ConnectionIndicators';
 import { DriveControls } from '../components/DriveControls';
@@ -32,6 +32,9 @@ struct Index {
   private failures: number = 0;
   private lastUnavailableAt: number = 0;
   private disposed: boolean = false;
+  private homeEntranceStarted: boolean = false;
+  private homeTimers: number[] = [];
+  private connectionTimers: number[] = [];
 
   @State endpoint: string = 'http://192.168.149.1:8080';
   @State connected: boolean = false;
@@ -47,23 +50,74 @@ struct Index {
   @State lidarReady: boolean = false;
   @State captures: CaptureItem[] = [];
   @State showConnection: boolean = false;
+  @State homeAnimStep1: number = 0;
+  @State homeAnimStep2: number = 0;
+  @State homeAnimStep3: number = 0;
+  @State connectionAnimStep1: number = 0;
+  @State connectionAnimStep2: number = 0;
+  @State connectionAnimStep3: number = 0;
+  @State previewPressed: boolean = false;
 
   aboutToAppear(): void {
     this.disposed = false;
     this.captureStore = new CaptureStore(this.getUIContext().getHostContext() as common.UIAbilityContext);
     this.refreshCaptures();
+    this.startHomeEntrance();
   }
 
   aboutToDisappear(): void {
-    if (this.pageStack.size() > 0) {
-      // Leaving the driving surface must release movement, while diagnostics keep polling.
-      ++this.controlGeneration;
-      this.pressedKey = '';
-      this.stopCurrent();
-      return;
-    }
+    this.clearEntranceTimers(this.homeTimers);
+    this.clearEntranceTimers(this.connectionTimers);
     this.disposed = true;
     this.disconnect();
+  }
+
+  private clearEntranceTimers(timers: number[]): void {
+    timers.forEach((timer: number) => clearTimeout(timer));
+    timers.length = 0;
+  }
+
+  private startHomeEntrance(): void {
+    if (this.homeEntranceStarted) { return; }
+    this.homeEntranceStarted = true;
+    const curve = curves.springMotion(0.35, 0.75);
+    this.homeTimers.push(setTimeout(() => this.getUIContext().animateTo({ duration: 500, curve: curve },
+      () => this.homeAnimStep1 = 1), 100));
+    this.homeTimers.push(setTimeout(() => this.getUIContext().animateTo({ duration: 500, curve: curve },
+      () => this.homeAnimStep2 = 1), 225));
+    this.homeTimers.push(setTimeout(() => this.getUIContext().animateTo({ duration: 500, curve: curve },
+      () => this.homeAnimStep3 = 1), 350));
+  }
+
+  private startConnectionEntrance(): void {
+    this.clearEntranceTimers(this.connectionTimers);
+    this.connectionAnimStep1 = 0;
+    this.connectionAnimStep2 = 0;
+    this.connectionAnimStep3 = 0;
+    const curve = curves.springMotion(0.35, 0.75);
+    this.connectionTimers.push(setTimeout(() => this.getUIContext().animateTo({ duration: 500, curve: curve },
+      () => this.connectionAnimStep1 = 1), 80));
+    this.connectionTimers.push(setTimeout(() => this.getUIContext().animateTo({ duration: 500, curve: curve },
+      () => this.connectionAnimStep2 = 1), 205));
+    this.connectionTimers.push(setTimeout(() => this.getUIContext().animateTo({ duration: 500, curve: curve },
+      () => this.connectionAnimStep3 = 1), 330));
+  }
+
+  private stopConnectionEntrance(): void {
+    this.clearEntranceTimers(this.connectionTimers);
+    this.connectionAnimStep1 = 0;
+    this.connectionAnimStep2 = 0;
+    this.connectionAnimStep3 = 0;
+  }
+
+  private openGallery(): void {
+    if (this.pageStack.size() > 0) { return; }
+    // The driving surface is hidden by a destination, so release any held command first.
+    ++this.controlGeneration;
+    this.pressedKey = '';
+    this.stopCurrent();
+    this.refreshCaptures();
+    this.pageStack.pushPathByName('Gallery', null);
   }
 
   onPageHide(): void {
@@ -372,32 +426,39 @@ struct Index {
     Column({ space: 10 }) {
       ConnectionIndicators({ connected: this.connected, cameraReady: this.cameraStatus === 'live',
         lidarReady: this.lidarReady })
-      Text('视频预览 · 16:9').fontSize(13).fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.text_control')).width('100%')
-      Stack({ alignContent: Alignment.Center }) {
-        if (this.connected && this.cameraStatus === 'live' && this.frameUrl.length > 0) {
-          Image(this.frameUrl).width('100%').height('100%').objectFit(ImageFit.Contain)
-        } else {
-          Text('暂无预览').fontSize(12).fontColor($r('app.color.camera_hint'))
-        }
-      }.width('100%').aspectRatio(16 / 9)
-        .backgroundColor($r('app.color.camera_background')).borderRadius(14).clip(true)
-      Text('雷达 JSON').fontSize(13).fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.text_control')).width('100%')
-      Scroll() {
-        Text(this.lidarText).fontSize(10).fontFamily('monospace').fontColor($r('app.color.camera_text'))
-          .width('100%').padding(10)
-      }.width('100%').height(150).backgroundColor($r('app.color.camera_background')).borderRadius(14)
-      TextInput({ text: this.endpoint, placeholder: 'http://192.168.149.1:8080' })
-        .width('100%').height(48).backgroundColor($r('app.color.input_background')).borderRadius(13)
-        .fontColor($r('app.color.text_primary')).enabled(!this.connected && !this.connecting)
-        .onChange((value: string) => this.endpoint = value)
-      Button(this.connected ? '断开连接' : (this.connecting ? '连接中…' : '测试链接并连接'))
-        .width('100%').height(48).fontColor($r('app.color.white'))
-        .backgroundColor(this.connected ? $r('app.color.danger') : $r('app.color.accent_green')).borderRadius(14)
-        .enabled(!this.connecting)
-        .onClick(() => { Haptics.hard(); if (this.connected) { this.disconnect(); } else { this.connect(); } })
-      Text(this.message).fontSize(12).fontColor($r('app.color.text_secondary')).maxLines(2)
+        .opacity(this.connectionAnimStep1).translate({ y: this.connectionAnimStep1 ? 0 : 20 })
+      Column({ space: 8 }) {
+        Text('视频预览 · 16:9').fontSize(13).fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.text_control')).width('100%')
+        Stack({ alignContent: Alignment.Center }) {
+          if (this.connected && this.cameraStatus === 'live' && this.frameUrl.length > 0) {
+            Image(this.frameUrl).width('100%').height('100%').objectFit(ImageFit.Contain)
+          } else {
+            Text('暂无预览').fontSize(12).fontColor($r('app.color.camera_hint'))
+          }
+        }.width('100%').aspectRatio(16 / 9)
+          .backgroundColor($r('app.color.camera_background')).borderRadius(14).clip(true)
+      }.width('100%')
+        .opacity(this.connectionAnimStep2).translate({ y: this.connectionAnimStep2 ? 0 : 20 })
+      Column({ space: 10 }) {
+        Text('雷达 JSON').fontSize(13).fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.text_control')).width('100%')
+        Scroll() {
+          Text(this.lidarText).fontSize(10).fontFamily('monospace').fontColor($r('app.color.camera_text'))
+            .width('100%').padding(10)
+        }.width('100%').height(150).backgroundColor($r('app.color.camera_background')).borderRadius(14)
+        TextInput({ text: this.endpoint, placeholder: 'http://192.168.149.1:8080' })
+          .width('100%').height(48).backgroundColor($r('app.color.input_background')).borderRadius(13)
+          .fontColor($r('app.color.text_primary')).enabled(!this.connected && !this.connecting)
+          .onChange((value: string) => this.endpoint = value)
+        Button(this.connected ? '断开连接' : (this.connecting ? '连接中…' : '测试链接并连接'))
+          .width('100%').height(48).fontColor($r('app.color.white'))
+          .backgroundColor(this.connected ? $r('app.color.danger') : $r('app.color.accent_green')).borderRadius(14)
+          .enabled(!this.connecting)
+          .onClick(() => { Haptics.hard(); if (this.connected) { this.disconnect(); } else { this.connect(); } })
+        Text(this.message).fontSize(12).fontColor($r('app.color.text_secondary')).maxLines(2)
+      }.width('100%')
+        .opacity(this.connectionAnimStep3).translate({ y: this.connectionAnimStep3 ? 0 : 20 })
       Blank()
     }
     .width('100%').height('100%').padding({ left: 16, right: 16, top: 14, bottom: 16 })
@@ -407,8 +468,7 @@ struct Index {
   @Builder
   private PageMap(name: string) {
     if (name === 'Gallery') {
-      CaptureGallery({ items: this.captures, onBack: () => this.pageStack.pop(),
-        onRemove: (itemName: string) => this.removeCapture(itemName),
+      CaptureGallery({ items: this.captures, onRemove: (itemName: string) => this.removeCapture(itemName),
         onDownload: (item: CaptureItem) => this.downloadCapture(item) })
     }
   }
@@ -418,6 +478,7 @@ struct Index {
       Column({ space: 7 }) {
         ConnectionIndicators({ connected: this.connected, cameraReady: this.cameraStatus === 'live',
           lidarReady: this.lidarReady, onOpen: () => this.showConnection = true })
+          .opacity(this.homeAnimStep1).translate({ y: this.homeAnimStep1 ? 0 : 20 })
         Stack({ alignContent: Alignment.Center }) {
           if (this.connected && this.cameraStatus === 'live' && this.frameUrl.length > 0) {
             Image(this.frameUrl).width('100%').height('100%').objectFit(ImageFit.Contain)
@@ -433,15 +494,30 @@ struct Index {
             .borderRadius(10).position({ x: 10, y: 10 })
         }
         .width('100%').aspectRatio(16 / 9).backgroundColor($r('app.color.camera_background')).borderRadius(18)
-        .clip(true).onClick(() => { Haptics.hard(); this.capture(); })
+        .scale({ x: this.previewPressed ? 0.985 : 1, y: this.previewPressed ? 0.985 : 1 })
+        .visualEffect(new hdsEffect.HdsEffectBuilder()
+          .pressShadow(this.previewPressed ? hdsEffect.PressShadowType.BLEND_WHITE : hdsEffect.PressShadowType.NONE)
+          .pointLight({ sourceType: this.previewPressed ? hdsEffect.PointLightSourceType.BRIGHT :
+            hdsEffect.PointLightSourceType.NONE,
+            illuminatedType: hdsEffect.PointLightIlluminatedType.BORDER_CONTENT,
+            options: { color: '#FFFFFF', intensity: 7, height: 100 } }).buildEffect())
+        .clip(true)
+        .onTouch((event: TouchEvent) => {
+          if (event.type === TouchType.Down) { this.previewPressed = true; }
+          if (event.type === TouchType.Up || event.type === TouchType.Cancel) { this.previewPressed = false; }
+        })
+        .onClick(() => { Haptics.hard(); this.capture(); })
+        .opacity(this.homeAnimStep2).translate({ y: this.homeAnimStep2 ? 0 : 20 })
         DriveControls({ connected: this.connected, activeKey: this.activeKey, sliderSpeed: this.sliderSpeed,
           onStart: (key: string) => this.beginAction(key, true),
           onEnd: (key: string) => this.endAction(key),
           onStop: () => this.emergencyStop(),
           onSpeedChange: (value: number) => this.changeSpeed(value),
           onUnavailable: () => this.showUnavailable() })
+          .opacity(this.homeAnimStep3).translate({ y: this.homeAnimStep3 ? 0 : 20 })
         Text(this.message).fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          .opacity(this.homeAnimStep3).translate({ y: this.homeAnimStep3 ? 0 : 20 })
         Blank()
       }
       .width('100%').height('100%')
@@ -472,13 +548,16 @@ struct Index {
         title: { mainTitle: 'Astra Plus Drive' },
         menu: { value: [
           { content: { label: '图库', icon: $r('sys.symbol.picture'), isEnabled: true,
-            action: () => { Haptics.hard(); this.refreshCaptures(); this.pageStack.pushPathByName('Gallery', null); } } }
+            action: () => { Haptics.hard(); this.openGallery(); } } }
         ] }
       }
     })
     .bindSheet($$this.showConnection, this.ConnectionSheet(), {
       height: SheetSize.LARGE, showClose: true, title: { title: '连接小车' },
-      backgroundColor: $r('app.color.page_background'), onDisappear: () => this.showConnection = false
+      backgroundColor: $r('app.color.page_background'),
+      onAppear: () => this.startConnectionEntrance(),
+      onWillDismiss: (action: DismissSheetAction) => { Haptics.hard(); action.dismiss(); },
+      onDisappear: () => { this.stopConnectionEntrance(); this.showConnection = false; }
     })
   }
 }
