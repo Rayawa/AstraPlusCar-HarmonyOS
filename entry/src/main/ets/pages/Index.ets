@@ -34,7 +34,7 @@ struct Index {
   private failures: number = 0;
   private disposed: boolean = false;
 
-  @State endpoint: string = 'http://10.8.15.122:8088';
+  @State endpoint: string = 'http://192.168.149.1:8080';
   @State connected: boolean = false;
   @State connecting: boolean = false;
   @State @Watch('recordMessage') message: string = '连接小车 Wi-Fi 后输入车端地址';
@@ -436,16 +436,11 @@ struct Index {
         }
         .width('100%').layoutWeight(1).backgroundColor('#161B26').borderRadius(18)
         .clip(true).onClick(() => this.capture())
-        DriveControls({ connected: this.connected, activeKey: this.activeKey,
+        DriveControls({ connected: this.connected, activeKey: this.activeKey, sliderSpeed: this.sliderSpeed,
           onStart: (key: string) => this.beginAction(key, true),
           onEnd: (key: string) => this.endAction(key),
-          onStop: () => this.emergencyStop() })
-        Row({ space: 8 }) {
-          Text(`速度 ${this.sliderSpeed}`).fontSize(13).fontWeight(FontWeight.Bold).fontColor('#364B60')
-          Slider({ value: this.sliderSpeed, min: 0, max: 100, step: 1, style: SliderStyle.OutSet })
-            .layoutWeight(1).selectedColor('#41BA41')
-            .enabled(this.connected).onChange((value: number) => this.changeSpeed(value))
-        }.width('100%').height(39)
+          onStop: () => this.emergencyStop(),
+          onSpeedChange: (value: number) => this.changeSpeed(value) })
         Text(this.message).fontSize(11).fontColor('#596A7F').width('100%')
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
       }
