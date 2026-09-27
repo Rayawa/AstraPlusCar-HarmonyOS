@@ -2,15 +2,15 @@
   "string": [
     {
       "name": "module_desc",
-      "value": "module description"
+      "value": "Astra Plus Drive"
     },
     {
       "name": "EntryAbility_desc",
-      "value": "description"
+      "value": "Astra Plus Drive"
     },
     {
       "name": "EntryAbility_label",
-      "value": "Astra Drive"
+      "value": "Astra Plus Drive"
     }
   ]
 }

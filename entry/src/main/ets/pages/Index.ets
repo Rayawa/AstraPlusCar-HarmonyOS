@@ -34,7 +34,7 @@ struct Index {
   private failures: number = 0;
   private disposed: boolean = false;
 
-  @State endpoint: string = 'http://192.168.149.1:8080';
+  @State endpoint: string = 'http://10.8.15.122:8088';
   @State connected: boolean = false;
   @State connecting: boolean = false;
   @State @Watch('recordMessage') message: string = '连接小车 Wi-Fi 后输入车端地址';
