@@ -3,13 +3,12 @@ import { LengthMetrics } from '@kit.ArkUI';
 import { HdsNavigation } from '@hms.hds.hdsBaseComponent';
 import { hdsMaterial, HdsNavigationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
 import { CaptureStore, CaptureItem } from '../services/CaptureStore';
-import { ConsoleLine } from '../models/ConsoleLine';
 import { ConnectionIndicators } from '../components/ConnectionIndicators';
 import { DriveControls } from '../components/DriveControls';
-import { ConsoleDestination } from '../components/ConsoleDestination';
 import { CaptureGallery } from '../components/CaptureGallery';
 import { PhoneApi, PhoneStatus, PhoneSession, PhoneResult } from '../services/PhoneApi';
 import { LocalNetworkRoute } from '../services/LocalNetworkRoute';
+import { Haptics } from '../services/Haptics';
 
 @Entry
 @Component
@@ -24,7 +23,6 @@ struct Index {
   private speedTimer: number = -1;
   private controlGeneration: number = 0;
   private serial: number = 0;
-  private logSequence: number = 0;
   private sessionId: string = '';
   private commandId: string = '';
   private pressedKey: string = '';
@@ -32,12 +30,13 @@ struct Index {
   private speedBusy: boolean = false;
   private speedDesired: number = 40;
   private failures: number = 0;
+  private lastUnavailableAt: number = 0;
   private disposed: boolean = false;
 
   @State endpoint: string = 'http://192.168.149.1:8080';
   @State connected: boolean = false;
   @State connecting: boolean = false;
-  @State @Watch('recordMessage') message: string = '连接小车 Wi-Fi 后输入车端地址';
+  @State message: string = '连接小车 Wi-Fi 后输入车端地址';
   @State frameUrl: string = '';
   @State cameraStatus: string = 'waiting';
   @State lidarText: string = '等待雷达数据';
@@ -46,7 +45,6 @@ struct Index {
   @State activeKey: string = '';
   @State captureBusy: boolean = false;
   @State lidarReady: boolean = false;
-  @State logs: ConsoleLine[] = [];
   @State captures: CaptureItem[] = [];
   @State showConnection: boolean = false;
 
@@ -54,7 +52,6 @@ struct Index {
     this.disposed = false;
     this.captureStore = new CaptureStore(this.getUIContext().getHostContext() as common.UIAbilityContext);
     this.refreshCaptures();
-    if (this.logs.length === 0) { this.addLog('INFO', '等待小车连接'); }
   }
 
   aboutToDisappear(): void {
@@ -151,7 +148,6 @@ struct Index {
     this.cameraStatus = status.camera.status;
     this.lidarText = JSON.stringify(status.lidar, null, 2);
     this.lidarReady = status.lidar.status === 'live';
-    this.addLog('RECV', `速度 ${status.speed} · 雷达 ${status.lidar.status} · 视频 ${status.camera.status}`);
   }
 
   private stopRenewTimer(): void {
@@ -194,7 +190,7 @@ struct Index {
   }
 
   private async beginAction(key: string, held: boolean): Promise<void> {
-    if (!this.connected) { return; }
+    if (!this.connected) { this.showUnavailable(); return; }
     const current = ++this.controlGeneration;
     this.pressedKey = held ? key : '';
     await this.stopCurrent();
@@ -264,6 +260,7 @@ struct Index {
   }
 
   private emergencyStop(): void {
+    if (!this.connected) { this.showUnavailable(); return; }
     ++this.controlGeneration;
     this.pressedKey = '';
     this.stopCurrent();
@@ -271,7 +268,7 @@ struct Index {
   }
 
   private async stepSpeed(key: string): Promise<void> {
-    if (!this.connected) { return; }
+    if (!this.connected) { this.showUnavailable(); return; }
     try {
       let session = this.sessionId;
       if (!session) { session = (await this.api.session()).sessionId; this.sessionId = session; }
@@ -289,6 +286,7 @@ struct Index {
   }
 
   private changeSpeed(value: number): void {
+    if (!this.connected) { this.showUnavailable(); this.sliderSpeed = this.speed; return; }
     this.speedDesired = Math.round(value);
     this.sliderSpeed = this.speedDesired;
     if (this.speedTimer >= 0) { clearTimeout(this.speedTimer); }
@@ -324,16 +322,11 @@ struct Index {
     }
   }
 
-  private addLog(type: string, content: string): void {
-    const now = new Date();
-    const pad = (value: number): string => value.toString().padStart(2, '0');
-    const time = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
-    const line: ConsoleLine = { id: `${Date.now()}-${++this.logSequence}`, time: time, type: type, content: content };
-    this.logs = [...this.logs.slice(-199), line];
-  }
-
-  private recordMessage(): void {
-    this.addLog(this.message.includes('失败') || this.message.includes('中断') ? 'ERR' : 'INFO', this.message);
+  private showUnavailable(): void {
+    const now = Date.now();
+    if (now - this.lastUnavailableAt < 1800) { return; }
+    this.lastUnavailableAt = now;
+    this.getUIContext().getPromptAction().showToast({ message: '小车未连接', duration: 2000 });
   }
 
   private refreshCaptures(): void {
@@ -351,8 +344,17 @@ struct Index {
     } catch (error) { this.message = `删除失败：${(error as Error).message}`; }
   }
 
+  private async downloadCapture(item: CaptureItem): Promise<void> {
+    if (!this.captureStore) { return; }
+    try {
+      const saved = await this.captureStore.download(item);
+      if (saved) { this.message = '已下载到系统相册'; }
+    } catch (error) { this.message = `下载失败：${(error as Error).message}`; }
+  }
+
   private async capture(): Promise<void> {
-    if (!this.connected || this.captureBusy || !this.captureStore) { return; }
+    if (!this.connected) { this.showUnavailable(); return; }
+    if (this.captureBusy || !this.captureStore) { return; }
     this.captureBusy = true;
     try {
       const capture = await this.api.capture();
@@ -367,51 +369,47 @@ struct Index {
 
   @Builder
   private ConnectionSheet() {
-    Column({ space: 12 }) {
+    Column({ space: 10 }) {
       ConnectionIndicators({ connected: this.connected, cameraReady: this.cameraStatus === 'live',
         lidarReady: this.lidarReady })
-      Row({ space: 8 }) {
-        Column({ space: 6 }) {
-          Text('视频').fontSize(13).fontWeight(FontWeight.Bold).fontColor('#364B60')
-          Stack({ alignContent: Alignment.Center }) {
-            if (this.connected && this.cameraStatus === 'live' && this.frameUrl.length > 0) {
-              Image(this.frameUrl).width('100%').height('100%').objectFit(ImageFit.Contain)
-            } else {
-              Text('暂无预览').fontSize(12).fontColor('#8BA396')
-            }
-          }.width('100%').layoutWeight(1).backgroundColor('#161B26').borderRadius(14)
-        }.layoutWeight(1).height(220)
-        Column({ space: 6 }) {
-          Text('雷达 JSON').fontSize(13).fontWeight(FontWeight.Bold).fontColor('#364B60')
-          Scroll() {
-            Text(this.lidarText).fontSize(10).fontFamily('monospace').fontColor('#F2F6FA')
-              .width('100%').padding(8)
-          }.width('100%').layoutWeight(1).backgroundColor('#161B26').borderRadius(14)
-        }.layoutWeight(1).height(220)
-      }.width('100%')
+      Text('视频预览 · 16:9').fontSize(13).fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.text_control')).width('100%')
+      Stack({ alignContent: Alignment.Center }) {
+        if (this.connected && this.cameraStatus === 'live' && this.frameUrl.length > 0) {
+          Image(this.frameUrl).width('100%').height('100%').objectFit(ImageFit.Contain)
+        } else {
+          Text('暂无预览').fontSize(12).fontColor($r('app.color.camera_hint'))
+        }
+      }.width('100%').aspectRatio(16 / 9)
+        .backgroundColor($r('app.color.camera_background')).borderRadius(14).clip(true)
+      Text('雷达 JSON').fontSize(13).fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.text_control')).width('100%')
+      Scroll() {
+        Text(this.lidarText).fontSize(10).fontFamily('monospace').fontColor($r('app.color.camera_text'))
+          .width('100%').padding(10)
+      }.width('100%').height(150).backgroundColor($r('app.color.camera_background')).borderRadius(14)
       TextInput({ text: this.endpoint, placeholder: 'http://192.168.149.1:8080' })
-        .width('100%').height(48).backgroundColor('#E1EDFA').borderRadius(13)
-        .enabled(!this.connected && !this.connecting)
+        .width('100%').height(48).backgroundColor($r('app.color.input_background')).borderRadius(13)
+        .fontColor($r('app.color.text_primary')).enabled(!this.connected && !this.connecting)
         .onChange((value: string) => this.endpoint = value)
       Button(this.connected ? '断开连接' : (this.connecting ? '连接中…' : '测试链接并连接'))
-        .width('100%').height(48).fontColor('#FFFFFF')
-        .backgroundColor(this.connected ? '#FF3B30' : '#41BA41').borderRadius(14)
+        .width('100%').height(48).fontColor($r('app.color.white'))
+        .backgroundColor(this.connected ? $r('app.color.danger') : $r('app.color.accent_green')).borderRadius(14)
         .enabled(!this.connecting)
-        .onClick(() => { if (this.connected) { this.disconnect(); } else { this.connect(); } })
-      Text(this.message).fontSize(12).fontColor('#596A7F').maxLines(2)
+        .onClick(() => { Haptics.hard(); if (this.connected) { this.disconnect(); } else { this.connect(); } })
+      Text(this.message).fontSize(12).fontColor($r('app.color.text_secondary')).maxLines(2)
       Blank()
     }
     .width('100%').height('100%').padding({ left: 16, right: 16, top: 14, bottom: 16 })
-    .backgroundColor('#F2F6FA')
+    .backgroundColor($r('app.color.page_background'))
   }
 
   @Builder
   private PageMap(name: string) {
-    if (name === 'Console') {
-      ConsoleDestination({ lines: this.logs, onBack: () => this.pageStack.pop() })
-    } else if (name === 'Gallery') {
+    if (name === 'Gallery') {
       CaptureGallery({ items: this.captures, onBack: () => this.pageStack.pop(),
-        onRemove: (itemName: string) => this.removeCapture(itemName) })
+        onRemove: (itemName: string) => this.removeCapture(itemName),
+        onDownload: (item: CaptureItem) => this.downloadCapture(item) })
     }
   }
 
@@ -425,34 +423,36 @@ struct Index {
             Image(this.frameUrl).width('100%').height('100%').objectFit(ImageFit.Contain)
           } else {
             Column({ space: 5 }) {
-              Text('监看画面').fontSize(17).fontWeight(FontWeight.Bold).fontColor('#DBE8DC')
+              Text('监看画面').fontSize(17).fontWeight(FontWeight.Bold).fontColor($r('app.color.camera_text'))
               Text(this.connected ? '摄像头暂不可用' : '连接小车后显示实时画面')
-                .fontSize(12).fontColor('#A5B9A9')
+                .fontSize(12).fontColor($r('app.color.camera_hint'))
             }
           }
           Text(this.captureBusy ? '保存中…' : '轻触截图')
-            .fontSize(10).fontColor('#FFFFFF').padding(7).backgroundColor('#77000000')
+            .fontSize(10).fontColor($r('app.color.white')).padding(7).backgroundColor('#77000000')
             .borderRadius(10).position({ x: 10, y: 10 })
         }
-        .width('100%').layoutWeight(1).backgroundColor('#161B26').borderRadius(18)
-        .clip(true).onClick(() => this.capture())
+        .width('100%').aspectRatio(16 / 9).backgroundColor($r('app.color.camera_background')).borderRadius(18)
+        .clip(true).onClick(() => { Haptics.hard(); this.capture(); })
         DriveControls({ connected: this.connected, activeKey: this.activeKey, sliderSpeed: this.sliderSpeed,
           onStart: (key: string) => this.beginAction(key, true),
           onEnd: (key: string) => this.endAction(key),
           onStop: () => this.emergencyStop(),
-          onSpeedChange: (value: number) => this.changeSpeed(value) })
-        Text(this.message).fontSize(11).fontColor('#596A7F').width('100%')
+          onSpeedChange: (value: number) => this.changeSpeed(value),
+          onUnavailable: () => this.showUnavailable() })
+        Text(this.message).fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        Blank()
       }
       .width('100%').height('100%')
       .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-      .backgroundColor('#F2F6FA')
+      .backgroundColor($r('app.color.page_background'))
     }
     .mode(NavigationMode.Stack)
     .navDestination(this.PageMap)
     .titleMode(HdsNavigationTitleMode.MINI)
     .hideBackButton(true)
-    .width('100%').height(LayoutPolicy.matchParent).background('#F2F6FA')
+    .width('100%').height(LayoutPolicy.matchParent).background($r('app.color.page_background'))
     .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
     .titleBar({
       enableComponentSafeArea: true,
@@ -461,26 +461,24 @@ struct Index {
           blurEffectiveStartOffset: LengthMetrics.vp(0), blurEffectiveEndOffset: LengthMetrics.vp(20) },
         systemMaterialEffect: { materialType: hdsMaterial.MaterialType.IMMERSIVE,
           materialLevel: hdsMaterial.MaterialLevel.EXQUISITE },
-        originalStyle: { backgroundStyle: { backgroundColor: '#F2F6FA' },
-          contentStyle: { titleStyle: { mainTitleColor: '#202F42' },
-            menuStyle: { backgroundColor: '#E1EDFA', iconColor: '#202F42' } } },
-        scrollEffectStyle: { backgroundStyle: { backgroundColor: '#F2F6FA' },
-          contentStyle: { titleStyle: { mainTitleColor: '#202F42' },
-            menuStyle: { backgroundColor: '#E1EDFA', iconColor: '#202F42' } } }
+        originalStyle: { backgroundStyle: { backgroundColor: $r('app.color.page_background') },
+          contentStyle: { titleStyle: { mainTitleColor: $r('app.color.text_primary') },
+            menuStyle: { backgroundColor: $r('app.color.input_background'), iconColor: $r('app.color.text_primary') } } },
+        scrollEffectStyle: { backgroundStyle: { backgroundColor: $r('app.color.page_background') },
+          contentStyle: { titleStyle: { mainTitleColor: $r('app.color.text_primary') },
+            menuStyle: { backgroundColor: $r('app.color.input_background'), iconColor: $r('app.color.text_primary') } } }
       },
       content: {
         title: { mainTitle: 'Astra Plus Drive' },
         menu: { value: [
-          { content: { label: '控制台', icon: $r('sys.symbol.code_square'), isEnabled: true,
-            action: () => this.pageStack.pushPathByName('Console', null) } },
           { content: { label: '图库', icon: $r('sys.symbol.picture'), isEnabled: true,
-            action: () => { this.refreshCaptures(); this.pageStack.pushPathByName('Gallery', null); } } }
+            action: () => { Haptics.hard(); this.refreshCaptures(); this.pageStack.pushPathByName('Gallery', null); } } }
         ] }
       }
     })
     .bindSheet($$this.showConnection, this.ConnectionSheet(), {
       height: SheetSize.LARGE, showClose: true, title: { title: '连接小车' },
-      backgroundColor: '#F2F6FA', onDisappear: () => this.showConnection = false
+      backgroundColor: $r('app.color.page_background'), onDisappear: () => this.showConnection = false
     })
   }
 }

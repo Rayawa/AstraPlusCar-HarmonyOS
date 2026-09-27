@@ -1,5 +1,6 @@
 import { fileIo, fileUri } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
+import { photoAccessHelper } from '@kit.MediaLibraryKit';
 
 export interface CaptureItem {
   name: string;
@@ -10,8 +11,10 @@ export interface CaptureItem {
 /** App-owned captures survive restarts and can be removed without media-library permissions. */
 export class CaptureStore {
   private readonly directory: string;
+  private readonly context: common.UIAbilityContext;
 
   constructor(context: common.UIAbilityContext) {
+    this.context = context;
     this.directory = `${context.filesDir}/captures`;
     try { fileIo.mkdirSync(this.directory); } catch (error) { /* Already exists. */ }
   }
@@ -57,5 +60,24 @@ export class CaptureStore {
   remove(name: string): void {
     if (!/^astra-\d+-\d+\.jpg$/.test(name)) { throw new Error('截图名称无效'); }
     fileIo.unlinkSync(`${this.directory}/${name}`);
+  }
+
+  /** Export is always initiated by the user and confirmed by the system media dialog. */
+  async download(item: CaptureItem): Promise<boolean> {
+    if (!/^astra-\d+-\d+\.jpg$/.test(item.name)) { throw new Error('截图名称无效'); }
+    const source = fileUri.getUriFromPath(`${this.directory}/${item.name}`);
+    const helper = photoAccessHelper.getPhotoAccessHelper(this.context);
+    const destinations = await helper.showAssetsCreationDialog([source], [{
+      title: item.name.slice(0, -4), fileNameExtension: 'jpg',
+      photoType: photoAccessHelper.PhotoType.IMAGE
+    }]);
+    if (destinations.length === 0) { return false; }
+    const input = fileIo.openSync(source, fileIo.OpenMode.READ_ONLY);
+    try {
+      const output = fileIo.openSync(destinations[0], fileIo.OpenMode.WRITE_ONLY);
+      try { fileIo.copyFileSync(input.fd, output.fd); }
+      finally { fileIo.closeSync(output); }
+    } finally { fileIo.closeSync(input); }
+    return true;
   }
 }

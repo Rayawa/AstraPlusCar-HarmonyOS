@@ -2,6 +2,102 @@
   "color": [
     {
       "name": "start_window_background",
+      "value": "#101822"
+    },
+    {
+      "name": "page_background",
+      "value": "#101822"
+    },
+    {
+      "name": "panel_background",
+      "value": "#1B2835"
+    },
+    {
+      "name": "surface_background",
+      "value": "#263544"
+    },
+    {
+      "name": "input_background",
+      "value": "#26394B"
+    },
+    {
+      "name": "text_primary",
+      "value": "#EFF5FA"
+    },
+    {
+      "name": "text_secondary",
+      "value": "#B0BFCC"
+    },
+    {
+      "name": "text_control",
+      "value": "#DBE7EF"
+    },
+    {
+      "name": "control_idle",
+      "value": "#314659"
+    },
+    {
+      "name": "control_side",
+      "value": "#293C4D"
+    },
+    {
+      "name": "control_border",
+      "value": "#567086"
+    },
+    {
+      "name": "control_separator",
+      "value": "#101822"
+    },
+    {
+      "name": "accent_green",
+      "value": "#54C75B"
+    },
+    {
+      "name": "accent_green_soft",
+      "value": "#183B28"
+    },
+    {
+      "name": "accent_green_text",
+      "value": "#B6E9B8"
+    },
+    {
+      "name": "accent_green_border",
+      "value": "#3F7950"
+    },
+    {
+      "name": "danger",
+      "value": "#FF6259"
+    },
+    {
+      "name": "danger_soft",
+      "value": "#492A2C"
+    },
+    {
+      "name": "danger_text",
+      "value": "#FFC3BE"
+    },
+    {
+      "name": "danger_border",
+      "value": "#955354"
+    },
+    {
+      "name": "camera_background",
+      "value": "#080D13"
+    },
+    {
+      "name": "camera_text",
+      "value": "#E1EFE3"
+    },
+    {
+      "name": "camera_hint",
+      "value": "#B7CABC"
+    },
+    {
+      "name": "white",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "gallery_background",
       "value": "#000000"
     }
   ]
