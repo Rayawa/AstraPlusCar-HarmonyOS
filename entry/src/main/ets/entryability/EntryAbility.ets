@@ -18,11 +18,11 @@ export default class EntryAbility extends UIAbility {
 
     windowStage.getMainWindow()
       .then((mainWindow: window.Window) => {
-        return mainWindow.setPreferredOrientation(window.Orientation.AUTO_ROTATION_PORTRAIT);
+        return mainWindow.setPreferredOrientation(window.Orientation.AUTO_ROTATION);
       })
       .catch((err: Error) => {
         hilog.error(LogConfig.DOMAIN, LogConfig.TAG,
-          'Failed to set portrait orientation. Cause: %{public}s', JSON.stringify(err));
+          'Failed to set auto rotation. Cause: %{public}s', JSON.stringify(err));
       });
 
     windowStage.loadContent('pages/Index', (err) => {

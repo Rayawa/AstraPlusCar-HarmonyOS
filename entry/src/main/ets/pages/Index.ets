@@ -5,6 +5,7 @@ import { hdsEffect, hdsMaterial, HdsNavigationTitleMode, ScrollEffectType } from
 import { CaptureStore, CaptureItem } from '../services/CaptureStore';
 import { ConnectionIndicators } from '../components/ConnectionIndicators';
 import { DriveControls } from '../components/DriveControls';
+import { LandscapeControlPad } from '../components/LandscapeControlPad';
 import { CaptureGallery } from '../components/CaptureGallery';
 import { PhoneApi, PhoneStatus, PhoneSession, PhoneResult } from '../services/PhoneApi';
 import { LocalNetworkRoute } from '../services/LocalNetworkRoute';
@@ -31,6 +32,7 @@ struct Index {
   private speedDesired: number = 40;
   private failures: number = 0;
   private lastUnavailableAt: number = 0;
+  private lastLandscapeSliderVibration: number = 0;
   private disposed: boolean = false;
   private homeEntranceStarted: boolean = false;
   private homeTimers: number[] = [];
@@ -57,6 +59,40 @@ struct Index {
   @State connectionAnimStep2: number = 0;
   @State connectionAnimStep3: number = 0;
   @State previewPressed: boolean = false;
+  @State viewportWidth: number = 0;
+  @State viewportHeight: number = 0;
+  @State isLandscape: boolean = false;
+
+  private updateViewport(width: number, height: number): void {
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) { return; }
+    const landscape: boolean = width > height;
+    if (landscape !== this.isLandscape && this.pressedKey.length > 0) {
+      this.endAction(this.pressedKey);
+    }
+    this.viewportWidth = width;
+    this.viewportHeight = height;
+    this.isLandscape = landscape;
+  }
+
+  private pictureWidth(): number {
+    return Math.min(this.viewportWidth, this.viewportHeight * 16 / 9);
+  }
+
+  private pictureHeight(): number {
+    return this.pictureWidth() * 9 / 16;
+  }
+
+  private padSize(): number {
+    return Math.min(188, Math.max(132, this.pictureHeight() * 0.47));
+  }
+
+  private padInset(): number {
+    return Math.min(28, Math.max(16, this.pictureHeight() * 0.045));
+  }
+
+  private messageWidth(): number {
+    return Math.min(280, this.pictureWidth() - 2 * (this.padSize() + this.padInset()) - 24);
+  }
 
   aboutToAppear(): void {
     this.disposed = false;
@@ -423,7 +459,8 @@ struct Index {
 
   @Builder
   private ConnectionSheet() {
-    Column({ space: 10 }) {
+    Scroll() {
+      Column({ space: 10 }) {
       ConnectionIndicators({ connected: this.connected, cameraReady: this.cameraStatus === 'live',
         lidarReady: this.lidarReady })
         .opacity(this.connectionAnimStep1).translate({ y: this.connectionAnimStep1 ? 0 : 20 })
@@ -443,10 +480,9 @@ struct Index {
       Column({ space: 10 }) {
         Text('雷达 JSON').fontSize(13).fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.text_control')).width('100%')
-        Scroll() {
-          Text(this.lidarText).fontSize(10).fontFamily('monospace').fontColor($r('app.color.camera_text'))
-            .width('100%').padding(10)
-        }.width('100%').height(150).backgroundColor($r('app.color.camera_background')).borderRadius(14)
+        Text(this.lidarText).fontSize(10).fontFamily('monospace').fontColor($r('app.color.camera_text'))
+          .width('100%').padding(10)
+          .backgroundColor($r('app.color.camera_background')).borderRadius(14)
         TextInput({ text: this.endpoint, placeholder: 'http://192.168.149.1:8080' })
           .width('100%').height(48).backgroundColor($r('app.color.input_background')).borderRadius(13)
           .fontColor($r('app.color.text_primary')).enabled(!this.connected && !this.connecting)
@@ -459,9 +495,10 @@ struct Index {
         Text(this.message).fontSize(12).fontColor($r('app.color.text_secondary')).maxLines(2)
       }.width('100%')
         .opacity(this.connectionAnimStep3).translate({ y: this.connectionAnimStep3 ? 0 : 20 })
-      Blank()
+      }
+      .width('100%').padding({ left: 16, right: 16, top: 14, bottom: 24 })
     }
-    .width('100%').height('100%').padding({ left: 16, right: 16, top: 14, bottom: 16 })
+    .width('100%').height('100%').scrollBar(BarState.On)
     .backgroundColor($r('app.color.page_background'))
   }
 
@@ -473,8 +510,96 @@ struct Index {
     }
   }
 
+  @Builder
+  private LandscapeHome() {
+    Stack({ alignContent: Alignment.Center }) {
+      Stack({ alignContent: Alignment.Center }) {
+        if (this.connected && this.cameraStatus === 'live' && this.frameUrl.length > 0) {
+          Image(this.frameUrl).width('100%').height('100%').objectFit(ImageFit.Contain)
+        } else {
+          Column({ space: 5 }) {
+            Text('监看画面').fontSize(19).fontWeight(FontWeight.Bold).fontColor(Color.White)
+            Text(this.connected ? '摄像头暂不可用' : '连接小车后显示实时画面')
+              .fontSize(12).fontColor('#B8C8D2')
+          }
+        }
+
+        Row({ space: 7 }) {
+          Column().width(8).height(8).borderRadius(4)
+            .backgroundColor(this.connected ? '#62E6A7' : '#FF6B6B')
+          Column({ space: 2 }) {
+            Text(this.connected ? '车辆在线' : '车辆离线')
+              .fontSize(12).fontWeight(FontWeight.Bold).fontColor(Color.White)
+            Text(this.cameraStatus === 'live' ? '摄像头在线' : '摄像头离线')
+              .fontSize(10).fontColor('#D9FFFFFF')
+          }.alignItems(HorizontalAlign.Start)
+        }
+        .height(42).padding({ left: 10, right: 10 })
+        .backgroundColor('#99000000').borderRadius(12)
+        .position({ x: 12, y: 12 })
+        .onClick(() => { Haptics.hard(); this.showConnection = true; })
+
+        Row({ space: 5 }) {
+          Text(`速度 ${this.sliderSpeed}`)
+            .width(54).fontSize(11).fontWeight(FontWeight.Bold).fontColor(Color.White)
+          Slider({ value: this.sliderSpeed, min: 0, max: 100, step: 1, style: SliderStyle.OutSet })
+            .layoutWeight(1).selectedColor('#62E6A7').blockColor(Color.White)
+            .trackColor('#77FFFFFF')
+            .onChange((value: number) => {
+              if (Date.now() - this.lastLandscapeSliderVibration > 80) {
+                Haptics.soft();
+                this.lastLandscapeSliderVibration = Date.now();
+              }
+              this.changeSpeed(value);
+            })
+        }
+        .width(240).height(42).padding({ left: 9, right: 9 })
+        .backgroundColor('#99000000').borderRadius(12)
+        .position({ x: (this.pictureWidth() - 240) / 2, y: 12 })
+
+        Button('相册')
+          .width(68).height(42).fontSize(12).fontWeight(FontWeight.Bold)
+          .fontColor(Color.White).backgroundColor('#99000000').borderRadius(12)
+          .position({ x: this.pictureWidth() - 80, y: 12 })
+          .onClick(() => { Haptics.hard(); this.openGallery(); })
+
+        LandscapeControlPad({
+          padDiameter: this.padSize(), drive: true, activeKey: this.activeKey,
+          onStart: (key: string) => { Haptics.soft(); this.beginAction(key, true); },
+          onEnd: (key: string) => this.endAction(key),
+          onStop: () => { Haptics.hard(); this.emergencyStop(); }
+        })
+          .position({ x: this.padInset(), y: this.pictureHeight() - this.padSize() - this.padInset() })
+
+        LandscapeControlPad({
+          padDiameter: this.padSize(), drive: false, activeKey: this.activeKey, captureBusy: this.captureBusy,
+          onStart: (key: string) => { Haptics.soft(); this.beginAction(key, true); },
+          onEnd: (key: string) => this.endAction(key),
+          onCapture: () => { Haptics.hard(); this.capture(); }
+        })
+          .position({ x: this.pictureWidth() - this.padSize() - this.padInset(),
+            y: this.pictureHeight() - this.padSize() - this.padInset() })
+
+        Text(this.message)
+          .width(this.messageWidth()).textAlign(TextAlign.Center)
+          .fontSize(10).fontColor(Color.White).maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+          .backgroundColor('#88000000').borderRadius(8)
+          .position({ x: (this.pictureWidth() - this.messageWidth()) / 2,
+            y: this.pictureHeight() - 30 })
+      }
+      .width(this.pictureWidth()).height(this.pictureHeight())
+      .backgroundColor(Color.Black).clip(true)
+    }
+    .width('100%').height('100%').backgroundColor(Color.Black)
+  }
+
   build() {
     HdsNavigation(this.pageStack) {
+      if (this.isLandscape) {
+        this.LandscapeHome()
+      } else {
       Column({ space: 7 }) {
         ConnectionIndicators({ connected: this.connected, cameraReady: this.cameraStatus === 'live',
           lidarReady: this.lidarReady, onOpen: () => this.showConnection = true })
@@ -523,12 +648,18 @@ struct Index {
       .width('100%').height('100%')
       .padding({ left: 14, right: 14, top: 8, bottom: 8 })
       .backgroundColor($r('app.color.page_background'))
+      }
     }
     .mode(NavigationMode.Stack)
     .navDestination(this.PageMap)
     .titleMode(HdsNavigationTitleMode.MINI)
+    .hideTitleBar(this.isLandscape)
     .hideBackButton(true)
-    .width('100%').height(LayoutPolicy.matchParent).background($r('app.color.page_background'))
+    .width('100%').height(LayoutPolicy.matchParent)
+    .background(this.isLandscape ? Color.Black : $r('app.color.page_background'))
+    .onAreaChange((oldValue: Area, newValue: Area) => {
+      this.updateViewport(Number(newValue.width), Number(newValue.height));
+    })
     .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
     .titleBar({
       enableComponentSafeArea: true,
