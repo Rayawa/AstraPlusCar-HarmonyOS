@@ -1,4 +1,5 @@
 import { connection } from '@kit.NetworkKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 
 /**
  * Keeps private-LAN car traffic on Wi-Fi/Ethernet instead of allowing the
@@ -15,13 +16,19 @@ export class LocalNetworkRoute {
       const selected = wifi !== undefined ? wifi :
         await this.findByBearer(networks, connection.NetBearType.BEARER_ETHERNET);
       if (selected === undefined) {
+        hilog.warn(0x0000, 'AstraCamera', 'no LAN network available');
         return false;
       }
+      const properties = await connection.getConnectionProperties(selected);
+      hilog.info(0x0000, 'AstraCamera', 'LAN route net=%{public}s interface=%{public}s addresses=%{public}s',
+        selected.netId.toString(), properties.interfaceName,
+        properties.linkAddresses.map((link: connection.LinkAddress) => link.address.address).join(','));
       await connection.setAppNet(selected);
       this.boundNetId = selected.netId;
       this.boundHandle = selected;
       return true;
     } catch (error) {
+      hilog.warn(0x0000, 'AstraCamera', 'LAN binding failed: %{public}s', (error as Error).message);
       return false;
     }
   }

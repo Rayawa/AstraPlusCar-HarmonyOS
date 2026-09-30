@@ -92,8 +92,8 @@ export class PhoneApi {
     return true;
   }
 
-  frameUrl(stamp: number): string {
-    return `${this.baseUrl}/api/v1/camera/frame.jpg?t=${stamp}`;
+  streamUrl(): string {
+    return `${this.baseUrl}/api/v1/camera/stream.mjpg`;
   }
 
   async status(): Promise<PhoneStatus> {
