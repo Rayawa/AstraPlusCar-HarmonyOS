@@ -6,6 +6,7 @@ import { CaptureStore, CaptureItem } from '../services/CaptureStore';
 import { ConnectionIndicators } from '../components/ConnectionIndicators';
 import { DriveControls } from '../components/DriveControls';
 import { LandscapeControlPad } from '../components/LandscapeControlPad';
+import { RadarOverlay } from '../components/RadarOverlay';
 import { CaptureGallery } from '../components/CaptureGallery';
 import { PhoneApi, PhoneStatus, PhoneSession, PhoneResult } from '../services/PhoneApi';
 import { LocalNetworkRoute } from '../services/LocalNetworkRoute';
@@ -38,13 +39,16 @@ struct Index {
   private homeTimers: number[] = [];
   private connectionTimers: number[] = [];
 
-  @State endpoint: string = 'http://192.168.149.1:8080';
+  @State endpoint: string = 'http://192.168.8.204:8080';
   @State connected: boolean = false;
   @State connecting: boolean = false;
   @State message: string = '连接小车 Wi-Fi 后输入车端地址';
   @State frameUrl: string = '';
   @State cameraStatus: string = 'waiting';
-  @State lidarText: string = '等待雷达数据';
+  @State lidarPoints: number = 0;
+  @State frontMm: number | null = null;
+  @State sector90Mm: number | null = null;
+  @State sector270Mm: number | null = null;
   @State speed: number = 40;
   @State sliderSpeed: number = 40;
   @State activeKey: string = '';
@@ -236,8 +240,11 @@ struct Index {
       this.sliderSpeed = status.speed;
     }
     this.cameraStatus = status.camera.status;
-    this.lidarText = JSON.stringify(status.lidar, null, 2);
-    this.lidarReady = status.lidar.status === 'live';
+    this.lidarPoints = status.lidar.points;
+    this.frontMm = status.lidar.front_nearest_mm;
+    this.sector90Mm = status.lidar.sector_90_mm ?? null;
+    this.sector270Mm = status.lidar.sector_270_mm ?? null;
+    this.lidarReady = status.lidar.status === 'scanning' && status.lidar.health === 'OK';
   }
 
   private stopRenewTimer(): void {
@@ -268,6 +275,10 @@ struct Index {
     this.connecting = false;
     this.cameraStatus = 'unavailable';
     this.lidarReady = false;
+    this.lidarPoints = 0;
+    this.frontMm = null;
+    this.sector90Mm = null;
+    this.sector270Mm = null;
     this.frameUrl = '';
     this.stopCurrent();
     this.networkRoute.release();
@@ -281,6 +292,7 @@ struct Index {
 
   private async beginAction(key: string, held: boolean): Promise<void> {
     if (!this.connected) { this.showUnavailable(); return; }
+    if (held && this.pressedKey.length > 0) { return; }
     const current = ++this.controlGeneration;
     this.pressedKey = held ? key : '';
     await this.stopCurrent();
@@ -377,6 +389,7 @@ struct Index {
 
   private changeSpeed(value: number): void {
     if (!this.connected) { this.showUnavailable(); this.sliderSpeed = this.speed; return; }
+    if (this.pressedKey.length > 0) { this.sliderSpeed = this.speed; return; }
     this.speedDesired = Math.round(value);
     this.sliderSpeed = this.speedDesired;
     if (this.speedTimer >= 0) { clearTimeout(this.speedTimer); }
@@ -475,15 +488,14 @@ struct Index {
           }
         }.width('100%').aspectRatio(16 / 9)
           .backgroundColor($r('app.color.camera_background')).borderRadius(14).clip(true)
+        RadarOverlay({ scanning: this.lidarReady, points: this.lidarPoints,
+          frontMm: this.frontMm, leftMm: this.sector270Mm, rightMm: this.sector90Mm })
       }.width('100%')
         .opacity(this.connectionAnimStep2).translate({ y: this.connectionAnimStep2 ? 0 : 20 })
       Column({ space: 10 }) {
-        Text('雷达 JSON').fontSize(13).fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.text_control')).width('100%')
-        Text(this.lidarText).fontSize(10).fontFamily('monospace').fontColor($r('app.color.camera_text'))
-          .width('100%').padding(10)
-          .backgroundColor($r('app.color.camera_background')).borderRadius(14)
-        TextInput({ text: this.endpoint, placeholder: 'http://192.168.149.1:8080' })
+        Text('雷达每秒更新；左 270°、前 0°、右 90°，显示各 ±30° 扇区最近距离，数值单位为毫米。')
+          .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+        TextInput({ text: this.endpoint, placeholder: 'http://192.168.8.204:8080' })
           .width('100%').height(48).backgroundColor($r('app.color.input_background')).borderRadius(13)
           .fontColor($r('app.color.text_primary')).enabled(!this.connected && !this.connecting)
           .onChange((value: string) => this.endpoint = value)
@@ -523,7 +535,10 @@ struct Index {
               .fontSize(12).fontColor('#B8C8D2')
           }
         }
-
+        RadarOverlay({ scanning: this.lidarReady, points: this.lidarPoints,
+          frontMm: this.frontMm, leftMm: this.sector270Mm, rightMm: this.sector90Mm })
+          .width(Math.min(340, this.pictureWidth() - 24))
+          .position({ x: (this.pictureWidth() - Math.min(340, this.pictureWidth() - 24)) / 2, y: 63 })
         Row({ space: 7 }) {
           Column().width(8).height(8).borderRadius(4)
             .backgroundColor(this.connected ? '#62E6A7' : '#FF6B6B')
@@ -565,6 +580,7 @@ struct Index {
 
         LandscapeControlPad({
           padDiameter: this.padSize(), drive: true, activeKey: this.activeKey,
+          canStart: (key: string) => this.pressedKey.length === 0,
           onStart: (key: string) => { Haptics.soft(); this.beginAction(key, true); },
           onEnd: (key: string) => this.endAction(key),
           onStop: () => { Haptics.hard(); this.emergencyStop(); }
@@ -573,6 +589,7 @@ struct Index {
 
         LandscapeControlPad({
           padDiameter: this.padSize(), drive: false, activeKey: this.activeKey, captureBusy: this.captureBusy,
+          canStart: (key: string) => this.pressedKey.length === 0,
           onStart: (key: string) => { Haptics.soft(); this.beginAction(key, true); },
           onEnd: (key: string) => this.endAction(key),
           onCapture: () => { Haptics.hard(); this.capture(); }
@@ -600,7 +617,7 @@ struct Index {
       if (this.isLandscape) {
         this.LandscapeHome()
       } else {
-      Column({ space: 7 }) {
+      Column({ space: 4 }) {
         ConnectionIndicators({ connected: this.connected, cameraReady: this.cameraStatus === 'live',
           lidarReady: this.lidarReady, onOpen: () => this.showConnection = true })
           .opacity(this.homeAnimStep1).translate({ y: this.homeAnimStep1 ? 0 : 20 })
@@ -633,20 +650,30 @@ struct Index {
         })
         .onClick(() => { Haptics.hard(); this.capture(); })
         .opacity(this.homeAnimStep2).translate({ y: this.homeAnimStep2 ? 0 : 20 })
+        RadarOverlay({ scanning: this.lidarReady, points: this.lidarPoints,
+          frontMm: this.frontMm, leftMm: this.sector270Mm, rightMm: this.sector90Mm })
+          .opacity(this.homeAnimStep2)
         DriveControls({ connected: this.connected, activeKey: this.activeKey, sliderSpeed: this.sliderSpeed,
+          canStart: (key: string) => this.pressedKey.length === 0,
           onStart: (key: string) => this.beginAction(key, true),
           onEnd: (key: string) => this.endAction(key),
-          onStop: () => this.emergencyStop(),
+          onCapture: () => { Haptics.hard(); this.capture(); },
           onSpeedChange: (value: number) => this.changeSpeed(value),
           onUnavailable: () => this.showUnavailable() })
           .opacity(this.homeAnimStep3).translate({ y: this.homeAnimStep3 ? 0 : 20 })
+        Button('停车 · 急停')
+          .width('100%').height(40).fontSize(14).fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.white')).backgroundColor($r('app.color.danger')).borderRadius(13)
+          .onClick(() => { Haptics.hard(); this.emergencyStop(); })
+          .opacity(this.homeAnimStep3)
         Text(this.message).fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+          .textAlign(TextAlign.Center).padding({ top: 4, bottom: 4 })
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           .opacity(this.homeAnimStep3).translate({ y: this.homeAnimStep3 ? 0 : 20 })
         Blank()
       }
       .width('100%').height('100%')
-      .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+      .padding({ left: 14, right: 14, top: 4, bottom: 4 })
       .backgroundColor($r('app.color.page_background'))
       }
     }

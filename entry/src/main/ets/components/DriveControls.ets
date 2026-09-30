@@ -10,9 +10,10 @@ export struct DriveControls {
   @Prop sliderSpeed: number = 40;
   @State private touchingKey: string = '';
   @State private rowWidth: number = 352;
+  canStart: (key: string) => boolean = () => true;
   onStart: (key: string) => void = () => {};
   onEnd: (key: string) => void = () => {};
-  onStop: () => void = () => {};
+  onCapture: () => void = () => {};
   onSpeedChange: (value: number) => void = () => {};
   onUnavailable: () => void = () => {};
 
@@ -79,7 +80,7 @@ export struct DriveControls {
     const dx: number = x - this.rowWidth / 2;
     const dy: number = y - 122;
     const radius: number = Math.sqrt(dx * dx + dy * dy);
-    if (radius <= 35) { return 'stop'; }
+    if (radius <= 35) { return 'capture'; }
     if (radius >= 44 && radius <= 113) {
       if (Math.abs(Math.abs(dx) - Math.abs(dy)) / Math.SQRT2 <= 5) { return ''; }
       if (Math.abs(dx) > Math.abs(dy)) { return dx > 0 ? 'd' : 'a'; }
@@ -97,35 +98,46 @@ export struct DriveControls {
   }
 
   private enterZone(next: string): void {
+    if (this.connected && !this.canStart(next)) { return; }
     this.heldZone = next;
     this.touchingKey = next;
     Haptics.soft();
     if (!this.connected) { this.onUnavailable(); return; }
-    if (next === 'stop') { this.onStop(); } else { this.onStart(next); }
+    if (next === 'capture') { this.onCapture(); } else { this.onStart(next); }
+  }
+
+  private releaseTouch(): void {
+    this.clearPending();
+    if (this.connected && this.heldZone.length > 0 && this.heldZone !== 'capture') {
+      this.onEnd(this.heldZone);
+    }
+    this.heldZone = '';
+    this.touchingKey = '';
+    this.trackingId = -1;
   }
 
   private touchPad(event: TouchEvent): void {
+    if (event.type === TouchType.Cancel) { this.releaseTouch(); return; }
     if (event.changedTouches.length === 0) { return; }
-    const point: TouchObject = event.changedTouches[0];
+    let point: TouchObject = event.changedTouches[0];
     if (event.type === TouchType.Down) {
       if (this.trackingId >= 0) { return; }
       this.trackingId = point.id;
-    } else if (point.id !== this.trackingId) { return; }
-    if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-      this.clearPending();
-      if (this.connected && this.heldZone.length > 0 && this.heldZone !== 'stop') { this.onEnd(this.heldZone); }
-      this.heldZone = '';
-      this.touchingKey = '';
-      this.trackingId = -1;
-      return;
+    } else {
+      let found: boolean = false;
+      for (const changed of event.changedTouches) {
+        if (changed.id === this.trackingId) { point = changed; found = true; break; }
+      }
+      if (!found) { return; }
     }
+    if (event.type === TouchType.Up) { this.releaseTouch(); return; }
     const next: string = this.zoneAt(point.x, point.y);
     if (next === this.heldZone) { this.clearPending(); return; }
-    if (this.connected && this.heldZone.length > 0 && this.heldZone !== 'stop') { this.onEnd(this.heldZone); }
+    if (this.connected && this.heldZone.length > 0 && this.heldZone !== 'capture') { this.onEnd(this.heldZone); }
     this.heldZone = '';
     this.touchingKey = '';
     if (next.length === 0) { this.clearPending(); return; }
-    if (event.type === TouchType.Down || next === 'stop') {
+    if (event.type === TouchType.Down || next === 'capture') {
       this.clearPending();
       this.enterZone(next);
       return;
@@ -187,9 +199,9 @@ export struct DriveControls {
     Column({ space: 8 }) {
       Stack({ alignContent: Alignment.Center }) {
         this.OuterKey('左旋转', 'q', 12, 31)
-        this.OuterKey('右旋转', 'e', this.rowWidth - 60, 31)
+        this.OuterKey('右旋转', 'e', this.rowWidth - 76, 31)
         this.OuterKey('左平移', 'left', 12, 189)
-        this.OuterKey('右平移', 'right', this.rowWidth - 60, 189)
+        this.OuterKey('右平移', 'right', this.rowWidth - 76, 189)
         Stack({ alignContent: Alignment.Center }) {
           Column().width(236).height(236).borderRadius(118)
             .backgroundColor($r('app.color.control_separator'))
@@ -220,14 +232,14 @@ export struct DriveControls {
             Column().width(76).height(76).borderRadius(38)
               .backgroundColor($r('app.color.control_separator'))
             Column().width(64).height(64).borderRadius(32)
-              .backgroundColor($r('app.color.danger'))
+              .backgroundColor($r('app.color.accent_green'))
               .border({ width: 1.5, color: $r('app.color.control_border') })
-              .shadow({ radius: this.touchingKey === 'stop' ? 12 : 0,
-                color: '#66FF5B56', offsetY: 2 })
-            Text('停车').fontSize(13).fontWeight(FontWeight.Bold).fontColor($r('app.color.white'))
+              .shadow({ radius: this.touchingKey === 'capture' ? 12 : 0,
+                color: '#6662E6A7', offsetY: 2 })
+            Text('截图').fontSize(13).fontWeight(FontWeight.Bold).fontColor($r('app.color.white'))
           }.width(76).height(76)
-            .scale({ x: this.touchingKey === 'stop' ? 0.94 : 1,
-              y: this.touchingKey === 'stop' ? 0.94 : 1 })
+            .scale({ x: this.touchingKey === 'capture' ? 0.94 : 1,
+              y: this.touchingKey === 'capture' ? 0.94 : 1 })
         }.width(236).height(236).hitTestBehavior(HitTestMode.None)
       }.width('100%').height(244)
         .onAreaChange((oldValue: Area, newValue: Area) => {
@@ -250,7 +262,7 @@ export struct DriveControls {
       }.width('100%').height(48).padding({ left: 8, right: 8 })
         .backgroundColor($r('app.color.control_side')).borderRadius(14)
         .border({ width: 1.5, color: $r('app.color.control_border') })
-    }.width('100%').padding(8)
+    }.width('100%').padding({ left: 8, right: 8, top: 4, bottom: 4 })
       .backgroundColor($r('app.color.panel_background')).borderRadius(22)
   }
 }

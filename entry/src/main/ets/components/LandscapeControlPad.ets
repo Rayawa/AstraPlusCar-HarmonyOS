@@ -7,6 +7,7 @@ export struct LandscapeControlPad {
   @Prop drive: boolean = true;
   @Prop activeKey: string = '';
   @Prop captureBusy: boolean = false;
+  canStart: (key: string) => boolean = () => true;
   onStart: (key: string) => void = () => {};
   onEnd: (key: string) => void = () => {};
   onStop: () => void = () => {};
@@ -67,6 +68,7 @@ export struct LandscapeControlPad {
   }
 
   private enterZone(next: string, fromDown: boolean): void {
+    if ((next !== 'center' || !this.drive) && !this.canStart(next)) { return; }
     this.heldZone = next;
     this.touchingKey = next;
     if (next === 'center') {
@@ -77,21 +79,29 @@ export struct LandscapeControlPad {
     }
   }
 
+  private releaseTouch(): void {
+    this.clearPending();
+    if (this.heldZone.length > 0 && this.heldZone !== 'center') { this.onEnd(this.heldZone); }
+    this.heldZone = '';
+    this.touchingKey = '';
+    this.trackingId = -1;
+  }
+
   private touchPad(event: TouchEvent): void {
+    if (event.type === TouchType.Cancel) { this.releaseTouch(); return; }
     if (event.changedTouches.length === 0) { return; }
-    const point: TouchObject = event.changedTouches[0];
+    let point: TouchObject = event.changedTouches[0];
     if (event.type === TouchType.Down) {
       if (this.trackingId >= 0) { return; }
       this.trackingId = point.id;
-    } else if (point.id !== this.trackingId) { return; }
-    if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-      this.clearPending();
-      if (this.heldZone.length > 0 && this.heldZone !== 'center') { this.onEnd(this.heldZone); }
-      this.heldZone = '';
-      this.touchingKey = '';
-      this.trackingId = -1;
-      return;
+    } else {
+      let found: boolean = false;
+      for (const changed of event.changedTouches) {
+        if (changed.id === this.trackingId) { point = changed; found = true; break; }
+      }
+      if (!found) { return; }
     }
+    if (event.type === TouchType.Up) { this.releaseTouch(); return; }
     const next: string = this.zoneAt(point.x, point.y);
     if (next === this.heldZone) { this.clearPending(); return; }
     if (this.heldZone.length > 0 && this.heldZone !== 'center') { this.onEnd(this.heldZone); }
