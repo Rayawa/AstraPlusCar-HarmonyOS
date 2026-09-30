@@ -57,9 +57,9 @@ export struct LandscapeControlPad {
     if (radius < this.padDiameter * 0.195 || radius > this.padDiameter / 2 - 5) { return ''; }
     if (Math.abs(Math.abs(dx) - Math.abs(dy)) / Math.SQRT2 <= this.padDiameter * 0.022) { return ''; }
     if (Math.abs(dx) > Math.abs(dy)) {
-      return dx < 0 ? (this.drive ? 'a' : 'left') : (this.drive ? 'd' : 'right');
+      return dx < 0 ? (this.drive ? 'a' : 'q') : (this.drive ? 'd' : 'e');
     }
-    return dy < 0 ? (this.drive ? 'w' : 'q') : (this.drive ? 's' : 'e');
+    return dy < 0 ? (this.drive ? 'w' : 'left') : (this.drive ? 's' : 'right');
   }
 
   private clearPending(): void {
@@ -141,8 +141,8 @@ export struct LandscapeControlPad {
         Stack() {
           Column().width(this.padDiameter).height(this.padDiameter)
             .backgroundColor(this.touchingKey === (this.drive ? ['w', 'd', 's', 'a'][index] :
-              ['q', 'right', 'e', 'left'][index]) || this.activeKey === (this.drive ?
-              ['w', 'd', 's', 'a'][index] : ['q', 'right', 'e', 'left'][index]) ?
+              ['left', 'e', 'right', 'q'][index]) || this.activeKey === (this.drive ?
+              ['w', 'd', 's', 'a'][index] : ['left', 'e', 'right', 'q'][index]) ?
               '#B862E6A7' : '#880B1B28')
             .clipShape(new PathShape({ commands: this.sectorPath(index) }))
           Path({ width: this.padDiameter, height: this.padDiameter, commands: this.sectorPath(index) })
@@ -150,13 +150,13 @@ export struct LandscapeControlPad {
             .width(this.padDiameter).height(this.padDiameter)
         }.width(this.padDiameter).height(this.padDiameter).hitTestBehavior(HitTestMode.None)
       }, (index: number) => index.toString())
-      this.DirectionLabel(this.drive ? '前进 W' : '左旋转', this.padDiameter * 0.29,
+      this.DirectionLabel(this.drive ? '前进 W' : '左平移', this.padDiameter * 0.29,
         this.padDiameter * 0.10, this.padDiameter * 0.42)
-      this.DirectionLabel(this.drive ? '左转 A' : '左平移', 0,
+      this.DirectionLabel(this.drive ? '左转 A' : '左旋转', 0,
         this.padDiameter * 0.43, this.padDiameter * 0.34)
-      this.DirectionLabel(this.drive ? '右转 D' : '右平移', this.padDiameter * 0.66,
+      this.DirectionLabel(this.drive ? '右转 D' : '右旋转', this.padDiameter * 0.66,
         this.padDiameter * 0.43, this.padDiameter * 0.34)
-      this.DirectionLabel(this.drive ? '后退 S' : '右旋转', this.padDiameter * 0.29,
+      this.DirectionLabel(this.drive ? '后退 S' : '右平移', this.padDiameter * 0.29,
         this.padDiameter * 0.75, this.padDiameter * 0.42)
       Column().width(this.padDiameter * 0.34).height(this.padDiameter * 0.34)
         .backgroundColor(this.drive ? '#D9D94040' : '#C70A84FF')

@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { curves, LengthMetrics } from '@kit.ArkUI';
+import { curves, LengthMetrics, window } from '@kit.ArkUI';
 import { HdsNavigation } from '@hms.hds.hdsBaseComponent';
 import { hdsEffect, hdsMaterial, HdsNavigationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
 import { CaptureStore, CaptureItem } from '../services/CaptureStore';
@@ -11,26 +11,32 @@ import { CaptureGallery } from '../components/CaptureGallery';
 import { PhoneApi, PhoneStatus, PhoneSession, PhoneResult } from '../services/PhoneApi';
 import { LocalNetworkRoute } from '../services/LocalNetworkRoute';
 import { Haptics } from '../services/Haptics';
+import { image } from '@kit.ImageKit';
+import { CameraStream } from '../services/CameraStream';
 
 @Entry
 @Component
 struct Index {
   private readonly api: PhoneApi = new PhoneApi();
+  private readonly cameraStream: CameraStream = new CameraStream();
   private readonly networkRoute: LocalNetworkRoute = new LocalNetworkRoute();
   private readonly pageStack: NavPathStack = new NavPathStack();
   private captureStore: CaptureStore | null = null;
   private statusTimer: number = -1;
-  private frameTimer: number = -1;
   private renewTimer: number = -1;
   private speedTimer: number = -1;
   private controlGeneration: number = 0;
+  private screenGeneration: number = 0;
   private serial: number = 0;
   private sessionId: string = '';
+  private sessionOpening: Promise<string> | null = null;
+  private sessionOpeningGeneration: number = -1;
   private commandId: string = '';
   private pressedKey: string = '';
   private renewing: boolean = false;
   private speedBusy: boolean = false;
   private speedDesired: number = 40;
+  private speedPending: boolean = false;
   private failures: number = 0;
   private lastUnavailableAt: number = 0;
   private lastLandscapeSliderVibration: number = 0;
@@ -43,7 +49,8 @@ struct Index {
   @State connected: boolean = false;
   @State connecting: boolean = false;
   @State message: string = '连接小车 Wi-Fi 后输入车端地址';
-  @State frameUrl: string = '';
+  @State cameraFrame: image.PixelMap | undefined = undefined;
+  @State previewFps: number = 0;
   @State cameraStatus: string = 'waiting';
   @State lidarPoints: number = 0;
   @State frontMm: number | null = null;
@@ -171,9 +178,19 @@ struct Index {
 
   private clearTimers(): void {
     if (this.statusTimer >= 0) { clearInterval(this.statusTimer); this.statusTimer = -1; }
-    if (this.frameTimer >= 0) { clearInterval(this.frameTimer); this.frameTimer = -1; }
     if (this.renewTimer >= 0) { clearInterval(this.renewTimer); this.renewTimer = -1; }
     if (this.speedTimer >= 0) { clearTimeout(this.speedTimer); this.speedTimer = -1; }
+  }
+
+  private async keepPreviewAwake(enabled: boolean): Promise<void> {
+    const current = ++this.screenGeneration;
+    try {
+      const mainWindow = await window.getLastWindow(
+        this.getUIContext().getHostContext() as common.UIAbilityContext);
+      if (current === this.screenGeneration) { await mainWindow.setWindowKeepScreenOn(enabled); }
+    } catch (error) {
+      // Window teardown must never delay disconnecting or stopping the car.
+    }
   }
 
   private async connect(): Promise<void> {
@@ -185,25 +202,23 @@ struct Index {
     this.connecting = true;
     this.message = '正在连接…';
     try {
-      let status: PhoneStatus;
-      try {
-        status = await this.api.status();
-      } catch (directError) {
-        await this.networkRoute.bind();
-        status = await this.api.status();
-      }
+      // Pin LAN traffic before opening the long-lived stream. A successful
+      // first request does not prevent later Wi-Fi/cellular network handover.
+      await this.networkRoute.bind();
+      if (this.disposed || !this.connecting) { await this.networkRoute.release(); return; }
+      const status: PhoneStatus = await this.api.status();
       if (this.disposed || !this.connecting) { return; }
       if (status.mode !== 'phone') { throw new Error('车端未进入 phone 模式'); }
       this.connected = true;
+      this.keepPreviewAwake(true);
       this.connecting = false;
       this.applyStatus(status);
       this.message = '已连接 · 手机手动模式';
       this.statusTimer = setInterval(() => this.pollStatus(), 1000);
-      this.frameTimer = setInterval(() => {
-        if (this.connected && this.cameraStatus === 'live') {
-          this.frameUrl = this.api.frameUrl(Date.now());
-        }
-      }, 180);
+      this.cameraStream.start(this.api.streamUrl(),
+        (frame: image.PixelMap) => { this.cameraFrame = frame; },
+        (fps: number) => { this.previewFps = fps; },
+        (reason: string) => this.connectionLost(`${reason}，已停止控制`));
     } catch (error) {
       this.connecting = false;
       this.message = `连接失败：${(error as Error).message}`;
@@ -213,12 +228,13 @@ struct Index {
 
   private async pollStatus(): Promise<void> {
     if (!this.connected) { return; }
+    const serial = this.serial;
     try {
       const status = await this.api.status();
       if (!this.connected) { return; }
       this.failures = 0;
       if (status.mode !== 'phone') { throw new Error('车端模式已改变'); }
-      this.applyStatus(status);
+      this.applyStatus(status, serial === this.serial);
       if (this.activeKey === 'z' && !status.moving) {
         ++this.controlGeneration;
         this.stopRenewTimer();
@@ -233,9 +249,9 @@ struct Index {
     }
   }
 
-  private applyStatus(status: PhoneStatus): void {
-    this.speed = status.speed;
-    if (this.speedTimer < 0 && !this.speedBusy) {
+  private applyStatus(status: PhoneStatus, syncSpeed: boolean = true): void {
+    if (syncSpeed && !this.speedPending && this.speedTimer < 0 && !this.speedBusy) {
+      this.speed = status.speed;
       this.speedDesired = status.speed;
       this.sliderSpeed = status.speed;
     }
@@ -272,6 +288,7 @@ struct Index {
     this.pressedKey = '';
     this.clearTimers();
     this.connected = false;
+    this.keepPreviewAwake(false);
     this.connecting = false;
     this.cameraStatus = 'unavailable';
     this.lidarReady = false;
@@ -279,7 +296,10 @@ struct Index {
     this.frontMm = null;
     this.sector90Mm = null;
     this.sector270Mm = null;
-    this.frameUrl = '';
+    this.cameraFrame = undefined;
+    this.previewFps = 0;
+    this.speedPending = false;
+    this.cameraStream.stop();
     this.stopCurrent();
     this.networkRoute.release();
     if (!this.disposed) { this.message = '已断开'; }
@@ -290,6 +310,32 @@ struct Index {
     this.message = text;
   }
 
+  private async ensureSession(current: number): Promise<string> {
+    // Share session creation between commands and speed changes. Serialize
+    // across gesture generations so a late speed request cannot replace one.
+    if (this.sessionOpening !== null) {
+      if (this.sessionOpeningGeneration === current) { return await this.sessionOpening; }
+      try { await this.sessionOpening; } catch (error) { /* Old gesture cancelled. */ }
+    }
+    if (!this.connected || current !== this.controlGeneration) { throw new Error('控制已取消'); }
+    if (this.sessionId.length > 0) { return this.sessionId; }
+    this.sessionOpeningGeneration = current;
+    const opening = this.openSession(current);
+    this.sessionOpening = opening;
+    try { return await opening; }
+    finally { if (this.sessionOpening === opening) { this.sessionOpening = null; } }
+  }
+
+  private async openSession(current: number): Promise<string> {
+    const session: PhoneSession = await this.api.session();
+    if (!this.connected || current !== this.controlGeneration) {
+      await this.api.stop(session.sessionId);
+      throw new Error('控制已取消');
+    }
+    this.sessionId = session.sessionId;
+    return session.sessionId;
+  }
+
   private async beginAction(key: string, held: boolean): Promise<void> {
     if (!this.connected) { this.showUnavailable(); return; }
     if (held && this.pressedKey.length > 0) { return; }
@@ -298,16 +344,15 @@ struct Index {
     await this.stopCurrent();
     if (!this.connected || current !== this.controlGeneration) { return; }
     try {
-      const session: PhoneSession = await this.api.session();
+      const session = await this.ensureSession(current);
       if (!this.connected || current !== this.controlGeneration) {
-        await this.api.stop(session.sessionId);
+        await this.api.stop(session);
         return;
       }
-      this.sessionId = session.sessionId;
       const id = this.nextId();
-      const result: PhoneResult = await this.api.command(session.sessionId, 1, id, key);
+      const result: PhoneResult = await this.api.command(session, ++this.serial, id, key);
       if (!this.connected || current !== this.controlGeneration) {
-        await this.api.stop(session.sessionId);
+        await this.api.stop(session);
         return;
       }
       this.speed = result.speed;
@@ -317,7 +362,9 @@ struct Index {
       if (this.activeKey.length > 0) {
         this.renewTimer = setInterval(() => this.renew(current), 150);
       }
+      if (this.speedDesired !== this.speed) { this.flushSpeed(); }
     } catch (error) {
+      if (current !== this.controlGeneration || !this.connected) { return; }
       this.message = `控制失败：${(error as Error).message}`;
       await this.stopCurrent();
     }
@@ -370,43 +417,36 @@ struct Index {
   }
 
   private async stepSpeed(key: string): Promise<void> {
-    if (!this.connected) { this.showUnavailable(); return; }
-    try {
-      let session = this.sessionId;
-      if (!session) { session = (await this.api.session()).sessionId; this.sessionId = session; }
-      const result = await this.api.command(session, ++this.serial, this.nextId(), key);
-      this.speed = result.speed;
-      this.speedDesired = result.speed;
-      this.sliderSpeed = result.speed;
-      if (this.activeKey === 'z') {
-        ++this.controlGeneration;
-        this.stopRenewTimer();
-        this.activeKey = '';
-        this.commandId = '';
-      }
-    } catch (error) { this.message = `调速失败：${(error as Error).message}`; }
+    this.changeSpeed(Math.min(100, Math.max(0, this.sliderSpeed + (key === 'up' ? 20 : -20))));
   }
 
   private changeSpeed(value: number): void {
     if (!this.connected) { this.showUnavailable(); this.sliderSpeed = this.speed; return; }
-    if (this.pressedKey.length > 0) { this.sliderSpeed = this.speed; return; }
     this.speedDesired = Math.round(value);
+    this.speedPending = true;
     this.sliderSpeed = this.speedDesired;
-    if (this.speedTimer >= 0) { clearTimeout(this.speedTimer); }
-    this.speedTimer = setTimeout(() => { this.speedTimer = -1; this.flushSpeed(); }, 120);
+    // Throttle while dragging; a debounce would wait until the finger stops.
+    if (this.speedTimer < 0) {
+      this.speedTimer = setTimeout(() => { this.speedTimer = -1; this.flushSpeed(); }, 120);
+    }
   }
 
   private async flushSpeed(): Promise<void> {
     if (!this.connected || this.speedBusy) { return; }
+    // Let the initial movement command establish its lease before adjusting it.
+    if (this.pressedKey.length > 0 && this.commandId.length === 0) { return; }
     this.speedBusy = true;
+    const current = this.controlGeneration;
     const target = this.speedDesired;
     let accepted = false;
     try {
-      let session = this.sessionId;
-      if (!session) { session = (await this.api.session()).sessionId; this.sessionId = session; }
+      const session = await this.ensureSession(current);
+      if (!this.connected || current !== this.controlGeneration) { return; }
       const result = await this.api.speed(session, ++this.serial, this.nextId(), target);
+      if (!this.connected || current !== this.controlGeneration || session !== this.sessionId) { return; }
       this.speed = result.speed;
       accepted = true;
+      this.speedPending = this.speedDesired !== target;
       if (this.speedDesired === target) { this.sliderSpeed = result.speed; }
       if (this.activeKey === 'z') {
         ++this.controlGeneration;
@@ -415,13 +455,16 @@ struct Index {
         this.commandId = '';
       }
     } catch (error) {
+      if (current !== this.controlGeneration || !this.connected) { return; }
       this.message = `调速失败：${(error as Error).message}`;
       this.speedDesired = this.speed;
+      this.speedPending = false;
       this.sliderSpeed = this.speed;
     }
     finally {
       this.speedBusy = false;
-      if (this.connected && accepted && this.speedDesired !== target) { this.flushSpeed(); }
+      if (this.connected && this.speedDesired !== this.speed &&
+        (accepted || current !== this.controlGeneration)) { this.flushSpeed(); }
     }
   }
 
@@ -481,8 +524,8 @@ struct Index {
         Text('视频预览 · 16:9').fontSize(13).fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.text_control')).width('100%')
         Stack({ alignContent: Alignment.Center }) {
-          if (this.connected && this.cameraStatus === 'live' && this.frameUrl.length > 0) {
-            Image(this.frameUrl).width('100%').height('100%').objectFit(ImageFit.Contain)
+          if (this.connected && this.cameraStatus === 'live' && this.cameraFrame !== undefined) {
+            Image(this.cameraFrame).width('100%').height('100%').objectFit(ImageFit.Contain)
           } else {
             Text('暂无预览').fontSize(12).fontColor($r('app.color.camera_hint'))
           }
@@ -526,8 +569,8 @@ struct Index {
   private LandscapeHome() {
     Stack({ alignContent: Alignment.Center }) {
       Stack({ alignContent: Alignment.Center }) {
-        if (this.connected && this.cameraStatus === 'live' && this.frameUrl.length > 0) {
-          Image(this.frameUrl).width('100%').height('100%').objectFit(ImageFit.Contain)
+        if (this.connected && this.cameraStatus === 'live' && this.cameraFrame !== undefined) {
+          Image(this.cameraFrame).width('100%').height('100%').objectFit(ImageFit.Contain)
         } else {
           Column({ space: 5 }) {
             Text('监看画面').fontSize(19).fontWeight(FontWeight.Bold).fontColor(Color.White)
@@ -545,7 +588,7 @@ struct Index {
           Column({ space: 2 }) {
             Text(this.connected ? '车辆在线' : '车辆离线')
               .fontSize(12).fontWeight(FontWeight.Bold).fontColor(Color.White)
-            Text(this.cameraStatus === 'live' ? '摄像头在线' : '摄像头离线')
+            Text(this.cameraStatus === 'live' ? `视频 ${this.previewFps} FPS` : '摄像头离线')
               .fontSize(10).fontColor('#D9FFFFFF')
           }.alignItems(HorizontalAlign.Start)
         }
@@ -622,8 +665,8 @@ struct Index {
           lidarReady: this.lidarReady, onOpen: () => this.showConnection = true })
           .opacity(this.homeAnimStep1).translate({ y: this.homeAnimStep1 ? 0 : 20 })
         Stack({ alignContent: Alignment.Center }) {
-          if (this.connected && this.cameraStatus === 'live' && this.frameUrl.length > 0) {
-            Image(this.frameUrl).width('100%').height('100%').objectFit(ImageFit.Contain)
+          if (this.connected && this.cameraStatus === 'live' && this.cameraFrame !== undefined) {
+            Image(this.cameraFrame).width('100%').height('100%').objectFit(ImageFit.Contain)
           } else {
             Column({ space: 5 }) {
               Text('监看画面').fontSize(17).fontWeight(FontWeight.Bold).fontColor($r('app.color.camera_text'))
@@ -631,7 +674,7 @@ struct Index {
                 .fontSize(12).fontColor($r('app.color.camera_hint'))
             }
           }
-          Text(this.captureBusy ? '保存中…' : '轻触截图')
+          Text(this.captureBusy ? '保存中…' : `${this.previewFps} FPS · 轻触截图`)
             .fontSize(10).fontColor($r('app.color.white')).padding(7).backgroundColor('#77000000')
             .borderRadius(10).position({ x: 10, y: 10 })
         }
