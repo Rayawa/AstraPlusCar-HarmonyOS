@@ -13,6 +13,9 @@ export interface PhoneLidar {
   points: number;
   nearest_mm: number | null;
   front_nearest_mm: number | null;
+  sector_90_mm?: number | null;
+  sector_180_mm?: number | null;
+  sector_270_mm?: number | null;
   observed_at: string | null;
   age_seconds?: number;
   error?: string;
@@ -59,7 +62,7 @@ interface RequestBody {
 }
 
 export class PhoneApi {
-  private baseUrl: string = 'http://192.168.149.1:8080';
+  private baseUrl: string = 'http://192.168.8.204:8080';
 
   static normalizeEndpoint(value: string): string {
     let result = value.trim();
