@@ -126,13 +126,17 @@ export struct LandscapeControlPad {
     }, 120);
   }
 
+  // Only constant ratios are passed in. The diameter is read from state inside the
+  // builder: ArkUI does not refresh a @Builder for by-value parameters, which used to
+  // leave every label sized for the first (pre-measurement) pad diameter.
   @Builder
-  private DirectionLabel(label: string, x: number, y: number, width: number) {
+  private DirectionLabel(label: string, xRatio: number, yRatio: number, widthRatio: number) {
     Text(label)
-      .width(width).height(24)
+      .width(this.padDiameter * widthRatio).height(24)
       .textAlign(TextAlign.Center).fontSize(this.drive ? 13 : 10)
       .fontWeight(FontWeight.Bold).fontColor(Color.White)
-      .position({ x: x, y: y }).hitTestBehavior(HitTestMode.None)
+      .position({ x: this.padDiameter * xRatio, y: this.padDiameter * yRatio })
+      .hitTestBehavior(HitTestMode.None)
   }
 
   build() {
@@ -150,21 +154,17 @@ export struct LandscapeControlPad {
             .width(this.padDiameter).height(this.padDiameter)
         }.width(this.padDiameter).height(this.padDiameter).hitTestBehavior(HitTestMode.None)
       }, (index: number) => index.toString())
-      this.DirectionLabel(this.drive ? '前进 W' : '左平移', this.padDiameter * 0.29,
-        this.padDiameter * 0.10, this.padDiameter * 0.42)
-      this.DirectionLabel(this.drive ? '左转 A' : '左旋转', 0,
-        this.padDiameter * 0.43, this.padDiameter * 0.34)
-      this.DirectionLabel(this.drive ? '右转 D' : '右旋转', this.padDiameter * 0.66,
-        this.padDiameter * 0.43, this.padDiameter * 0.34)
-      this.DirectionLabel(this.drive ? '后退 S' : '右平移', this.padDiameter * 0.29,
-        this.padDiameter * 0.75, this.padDiameter * 0.42)
+      this.DirectionLabel(this.drive ? '前进' : '左平移', 0.29, 0.10, 0.42)
+      this.DirectionLabel(this.drive ? '左转' : '左旋转', 0, 0.43, 0.34)
+      this.DirectionLabel(this.drive ? '右转' : '右旋转', 0.66, 0.43, 0.34)
+      this.DirectionLabel(this.drive ? '后退' : '右平移', 0.29, 0.75, 0.42)
       Column().width(this.padDiameter * 0.34).height(this.padDiameter * 0.34)
         .backgroundColor(this.drive ? '#D9D94040' : '#C70A84FF')
         .borderRadius(this.padDiameter * 0.17)
         .border({ width: 1.5, color: '#E8FFFFFF' })
         .hitTestBehavior(HitTestMode.None)
-      Text(this.drive ? '停车\nSTOP' : (this.captureBusy ? '保存中' : '截图'))
-        .textAlign(TextAlign.Center).fontSize(this.drive ? 10 : 11).fontWeight(FontWeight.Bold)
+      Text(this.drive ? '停车' : (this.captureBusy ? '保存中' : '截图'))
+        .textAlign(TextAlign.Center).fontSize(11).fontWeight(FontWeight.Bold)
         .fontColor(Color.White).hitTestBehavior(HitTestMode.None)
     }
     .width(this.padDiameter).height(this.padDiameter)

@@ -2,11 +2,14 @@
 export class MjpegParser {
   private buffer: Uint8Array = new Uint8Array(0);
   private frameLength: number = 0;
+  private partSequence: number = -1;
+  sequence: number = -1;
   private readonly maxFrameBytes: number = 1024 * 1024;
 
   reset(): void {
     this.buffer = new Uint8Array(0);
     this.frameLength = 0;
+    this.partSequence = this.sequence = -1;
   }
 
   push(chunk: ArrayBuffer): ArrayBuffer | null {
@@ -35,6 +38,8 @@ export class MjpegParser {
         const length = /Content-Length:\s*(\d+)/i.exec(header);
         if (length === null || !header.includes('image/jpeg')) { throw new Error('视频流格式无效'); }
         this.frameLength = Number(length[1]);
+        const sequence = /X-Frame-Sequence:\s*(\d+)/i.exec(header);
+        this.partSequence = sequence === null ? -1 : Number(sequence[1]);
         if (this.frameLength <= 0 || this.frameLength > this.maxFrameBytes) {
           throw new Error('视频帧长度无效');
         }
@@ -42,6 +47,7 @@ export class MjpegParser {
       }
       if (this.buffer.length < this.frameLength) { break; }
       latest = this.buffer.slice(0, this.frameLength).buffer as ArrayBuffer;
+      this.sequence = this.partSequence;
       this.buffer = this.buffer.slice(this.frameLength);
       this.frameLength = 0;
     }

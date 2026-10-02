@@ -146,9 +146,9 @@ export struct CaptureGallery {
     }
     .onShown(() => this.startGalleryEntrance())
     .onWillDisappear(() => Haptics.hard())
-    .height(LayoutPolicy.matchParent)
+    .width(LayoutPolicy.matchParent).height(LayoutPolicy.matchParent)
     .background($r('app.color.gallery_background'))
-    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.ALL])
     .titleBar({
       enableComponentSafeArea: true,
       style: {

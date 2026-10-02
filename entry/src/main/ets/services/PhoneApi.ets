@@ -92,8 +92,13 @@ export class PhoneApi {
     return true;
   }
 
-  streamUrl(): string {
-    return `${this.baseUrl}/api/v1/camera/stream.mjpg`;
+  streamUrl(fps: number = 30, frames: number = 0): string {
+    const limit = frames > 0 ? `&frames=${frames}` : '';
+    return `${this.baseUrl}/api/v1/camera/stream.mjpg?fps=${fps}${limit}`;
+  }
+
+  frameUrl(): string {
+    return `${this.baseUrl}/api/v1/camera/frame.jpg`;
   }
 
   async status(): Promise<PhoneStatus> {
@@ -137,7 +142,7 @@ export class PhoneApi {
       const response = await task.request(
         `${this.baseUrl}/api/v1/camera/captures/${encodeURIComponent(captureId)}`,
         { method: http.RequestMethod.GET, expectDataType: http.HttpDataType.ARRAY_BUFFER,
-          connectTimeout: 2000, readTimeout: 8000, usingCache: false });
+          connectTimeout: 2000, readTimeout: 8000, usingCache: false, usingProxy: false });
       if (response.responseCode !== 200 || !(response.result instanceof ArrayBuffer)) {
         throw new Error(`截图下载失败（HTTP ${response.responseCode}）`);
       }
@@ -156,6 +161,7 @@ export class PhoneApi {
         expectDataType: http.HttpDataType.STRING,
         connectTimeout: 2000,
         readTimeout: 2000,
+        usingProxy: false,
         usingCache: false
       };
       if (body !== undefined) {
