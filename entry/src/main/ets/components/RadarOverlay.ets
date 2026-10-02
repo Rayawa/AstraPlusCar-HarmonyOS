@@ -1,3 +1,5 @@
+import { RadarPresentation } from '../services/RadarPresentation';
+
 @Component
 struct RadarSector {
   @Prop label: string = '';
@@ -5,25 +7,23 @@ struct RadarSector {
   @Prop distance: number | null = null;
 
   private distanceText(): string {
-    return this.scanning && this.distance !== null && Number.isFinite(this.distance) ?
-      `${Math.round(this.distance)}` : '--';
+    return RadarPresentation.distanceText(this.distance, this.scanning);
   }
 
   private color(): string {
-    if (!this.scanning || this.distance === null || !Number.isFinite(this.distance)) { return '#AA354350'; }
-    if (this.distance <= 300) { return '#D0B52D3D'; }
-    if (this.distance <= 800) { return '#D0A56819'; }
-    return '#C0276848';
+    return RadarPresentation.color(this.distance, this.scanning);
   }
 
   build() {
     Column({ space: 1 }) {
-      Text(this.label).fontSize(9).fontColor(Color.White)
-      Text(this.distanceText()).fontSize(10).fontWeight(FontWeight.Bold)
-        .fontColor(Color.White).maxLines(1)
+      Text(`${this.label} · ${RadarPresentation.label(this.distance, this.scanning)}`)
+        .fontSize(9).fontColor('#D9FFFFFF')
+      Text(this.distanceText()).fontSize(12).fontWeight(FontWeight.Bold)
+        .fontColor(this.color()).maxLines(1)
     }
     .layoutWeight(1).height(37).justifyContent(FlexAlign.Center)
-    .backgroundColor(this.color()).borderRadius(7)
+    .backgroundColor('#40354350').borderRadius(7)
+    .border({ width: { bottom: 2 }, color: this.color() })
   }
 }
 
@@ -39,7 +39,7 @@ export struct RadarOverlay {
   build() {
     Column({ space: 4 }) {
       Row() {
-        Text(this.scanning ? `雷达 ${this.points} 点` : '雷达等待扫描')
+        Text(this.scanning ? `雷达 · 距离 m · ${this.points} 点` : '雷达暂无有效数据')
           .fontSize(9).fontColor(Color.White).maxLines(1)
       }.width('100%')
       Row({ space: 4 }) {

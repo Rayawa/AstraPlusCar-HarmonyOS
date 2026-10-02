@@ -19,12 +19,16 @@ function load(source, name, modules = {}) {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS }
   }).outputText;
   const context = { exports: {}, console, Date, Math, Number, String, Uint8Array, ArrayBuffer,
-    setTimeout, clearTimeout, setInterval, clearInterval, NavPathStack: Empty,
+    setTimeout, clearTimeout, setInterval, clearInterval, NavPathStack: Empty, Scroller: Empty,
     require: id => modules[id] || new Proxy({}, { get: () => Empty }) };
   vm.runInNewContext(output + `\nexports.TestClass = ${name};`, context);
   return context.exports.TestClass;
 }
 const Parser = load(fs.readFileSync(path.join(root, 'services/MjpegParser.ets'), 'utf8'), 'MjpegParser');
+const PhoneApi = load(fs.readFileSync(path.join(root, 'services/PhoneApi.ets'), 'utf8'), 'PhoneApi');
+assert.equal(new PhoneApi().streamUrl(15), 'http://192.168.8.204:8080/api/v1/camera/stream.mjpg?fps=15');
+assert.equal(new PhoneApi().frameUrl(), 'http://192.168.8.204:8080/api/v1/camera/frame.jpg');
+assert.equal(new PhoneApi().streamUrl(30, 12), 'http://192.168.8.204:8080/api/v1/camera/stream.mjpg?fps=30&frames=12');
 function part(jpeg) {
   return Buffer.concat([Buffer.from(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\n\r\n`),
     jpeg, Buffer.from('\r\n')]);
@@ -53,7 +57,60 @@ function testParser() {
 const indexSource = fs.readFileSync(path.join(root, 'pages/Index.ets'), 'utf8')
   .split('  @Builder')[0].replace(/@Entry\s*|@Component\s*|@State\s*/g, '')
   .replace('struct Index', 'class Index') + '\n}';
-const Index = load(indexSource, 'Index');
+const RadarPresentation = load(fs.readFileSync(path.join(root, 'services/RadarPresentation.ets'), 'utf8'),
+  'RadarPresentation');
+const savedConnection = new Map();
+let preferenceFlushes = 0;
+const connectionPreferences = {
+  getSync: (key, fallback) => savedConnection.get(key) ?? fallback,
+  putSync: (key, value) => savedConnection.set(key, value),
+  flush: async () => { preferenceFlushes++; }
+};
+const Index = load(indexSource, 'Index', {
+  '../services/PhoneApi': { PhoneApi },
+  '../services/RadarPresentation': { RadarPresentation },
+  '@kit.ArkData': { preferences: { getPreferencesSync: () => connectionPreferences } },
+  '@kit.PerformanceAnalysisKit': { hilog: { debug: () => {}, warn: () => {} } }
+});
+
+function testRadarReadings() {
+  const lidar = { status: 'scanning', health: 'OK', points: 1000, age_seconds: 0.2,
+    front_nearest_mm: 100, sector_90_mm: 501, sector_180_mm: 200, sector_270_mm: 50 };
+  const radar = RadarPresentation.read(lidar);
+  assert.equal(radar.frontMm, 100);
+  assert.equal(radar.leftMm, 50, 'valid readings below 100 mm are never clamped or dropped');
+  assert.equal(radar.rightMm, 501);
+  assert.equal(RadarPresentation.distanceText(100, true), '0.10 m');
+  assert.equal(RadarPresentation.distanceText(50, true), '0.05 m');
+  assert.equal(RadarPresentation.distanceText(1, true), '<0.01 m');
+  assert.equal(RadarPresentation.distanceText(null, true), '未测得');
+  assert.equal(RadarPresentation.distanceText(100, false), '未就绪');
+  assert.equal(RadarPresentation.rawText(100), '100 mm');
+  for (const [mm, expected] of [[50, 3], [100, 3], [200, 3], [200.25, 2], [500, 2], [500.25, 1]]) {
+    assert.equal(RadarPresentation.level(mm, true), expected, `threshold for ${mm} mm`);
+  }
+  for (const invalid of [null, undefined, 0, -1, NaN, Infinity, '100']) {
+    assert.equal(RadarPresentation.validDistance(invalid), null);
+    assert.equal(RadarPresentation.level(invalid, true), 0, 'missing readings never imply clear space');
+  }
+  for (const patch of [{ age_seconds: 2.5 }, { age_seconds: NaN }, { age_seconds: -1 },
+    { status: 'stale' }, { status: 'waiting' }, { health: 'error' }, { points: 0 }]) {
+    const unavailable = RadarPresentation.read({ ...lidar, ...patch });
+    assert.equal(unavailable.ready, false);
+    assert.equal(unavailable.frontMm, null);
+  }
+  assert.equal(RadarPresentation.read({ ...lidar, age_seconds: undefined }).ready, true,
+    'older servers without age metadata remain compatible');
+  const p = page(apiMock());
+  p.applyStatus({ speed: 40, camera: { status: 'live' }, lidar });
+  assert.equal(p.frontMm, 100);
+  assert.equal(p.sector270Mm, 50);
+  assert.equal(p.radarFreshness, '最近扫描 0.2 秒前');
+  p.applyStatus({ speed: 40, camera: { status: 'live' }, lidar: { ...lidar, status: 'stale' } });
+  assert.equal(p.lidarReady, false);
+  assert.equal(p.frontMm, null);
+  assert.equal(p.radarFreshness, '暂无新鲜扫描');
+}
 const padSource = fs.readFileSync(path.join(root, 'components/LandscapeControlPad.ets'), 'utf8')
   .split('  @Builder')[0].replace(/@Component\s*|@Prop\s*|@State\s*/g, '')
   .replace('struct LandscapeControlPad', 'class LandscapeControlPad') + '\n}';
@@ -74,6 +131,12 @@ function page(api) {
   const p = new Index();
   p.api = api;
   p.connected = true;
+  p.previewReady = true;
+  p.networkRoute = { bind: async () => true, release: async () => {} };
+  p.cameraStream = { start: () => {}, stop: () => {} };
+  p.toasts = [];
+  p.getUIContext = () => ({ getHostContext: () => ({}),
+    getPromptAction: () => ({ showToast: toast => p.toasts.push(toast.message) }) });
   return p;
 }
 function apiMock() {
@@ -174,6 +237,7 @@ async function testRouteBeforeStream() {
   const events = [];
   api.setBaseUrl = () => true;
   api.streamUrl = () => 'http://car/api/v1/camera/stream.mjpg';
+  api.frameUrl = () => 'http://car/api/v1/camera/frame.jpg';
   api.status = async () => {
     events.push('status');
     return { mode: 'phone', speed: 40, camera: { status: 'live' },
@@ -188,13 +252,101 @@ async function testRouteBeforeStream() {
   p.disconnect();
   p.clearTimers();
 }
+function withConnection(api) {
+  api.setBaseUrl = () => true;
+  api.streamUrl = () => 'http://car/api/v1/camera/stream.mjpg';
+  api.frameUrl = () => 'http://car/api/v1/camera/frame.jpg';
+  api.status = async () => ({ bootId: 'boot1', mode: 'phone', speed: 40, moving: false,
+    camera: { status: 'live' }, lidar: { points: 10, status: 'scanning', health: 'OK' } });
+  return api;
+}
+async function testStreamRecoveryNeverResumesMotion() {
+  const api = withConnection(apiMock());
+  const p = page(api);
+  let frame, failure, starts = 0;
+  const previews = [];
+  p.connected = false;
+  p.cameraStream.start = (url, onFrame, onRate, onFailure, framePreview) => {
+    starts++; frame = onFrame; failure = onFailure;
+    previews.push([url, framePreview]);
+  };
+  await p.connect();
+  p.showUnavailable = () => {};
+  await p.beginAction('w', true);
+  assert.equal(api.calls.filter(c => c[0] === 'command').length, 0, 'no motion without a fresh frame');
+  frame({});
+  await p.beginAction('w', true);
+  const oldSession = p.sessionId;
+  failure('test video stall');
+  assert.deepEqual(previews[0], ['http://car/api/v1/camera/stream.mjpg', true],
+    'the first connection already uses overlapping MJPEG segments');
+  assert.equal(p.activeKey, '');
+  assert.equal(p.pressedKey, '');
+  assert.equal(p.previewReady, false);
+  await delay(560);
+  assert.equal(starts, 2, 'stream recovers automatically');
+  assert.deepEqual(previews[1], ['http://car/api/v1/camera/stream.mjpg', true]);
+  assert.equal(p.connected, true);
+  assert.equal(p.previewReady, false);
+  assert.ok(api.calls.some(c => c[0] === 'stop' && c[1] === oldSession));
+  frame({});
+  assert.equal(api.calls.filter(c => c[0] === 'command').length, 1, 'old gesture never replays');
+  failure('second stall');
+  p.onPageHide();
+  await delay(560);
+  assert.equal(starts, 2, 'background cancels recovery');
+  assert.equal(p.reconnectTimer, -1);
+  await p.connectionCleanup;
+}
+async function testLateStatusCannotAffectNewConnection() {
+  const api = withConnection(apiMock());
+  const p = page(api);
+  p.bootId = 'boot1';
+  const pending = deferred();
+  let polls = 0;
+  api.status = () => { polls++; return pending.promise; };
+  const oldPoll = p.pollStatus();
+  await p.pollStatus();
+  assert.equal(polls, 1, 'status polling never overlaps in one connection');
+  p.disconnect();
+  p.connected = true;
+  p.speed = 55;
+  pending.resolve({ bootId: 'old-boot', mode: 'phone', speed: 10,
+    camera: { status: 'live' }, lidar: { points: 1, status: 'scanning', health: 'OK' } });
+  await oldPoll;
+  assert.equal(p.connected, true, 'old boot ID cannot disconnect a new connection');
+  assert.equal(p.speed, 55, 'late status cannot overwrite a new connection');
+  p.disconnect();
+  await p.connectionCleanup;
+}
+async function testCancelWhileBinding() {
+  const api = withConnection(apiMock());
+  const p = page(api);
+  p.connected = false;
+  const pending = deferred();
+  const events = [];
+  p.networkRoute.bind = async () => { events.push('bind'); await pending.promise; };
+  p.networkRoute.release = async () => { events.push('release'); };
+  const connecting = p.connect();
+  await delay(0);
+  p.disconnect();
+  pending.resolve();
+  await connecting;
+  await p.connectionCleanup;
+  assert.equal(p.connected, false);
+  assert.deepEqual(events, ['bind', 'release'], 'binding is released after a cancelled open finishes');
+}
 (async () => {
   testParser();
   testLandscapeMapping();
+  testRadarReadings();
   await testHeldSpeed();
   await testSpeedWhileStarting();
   await testCancelledSessionOpening();
   await testLateSpeedAfterStop();
   await testRouteBeforeStream();
-  console.log('MJPEG fragmentation/latest-frame/bounds, landscape mapping, LAN binding and 4 control timing regressions: OK');
+  await testStreamRecoveryNeverResumesMotion();
+  await testLateStatusCannotAffectNewConnection();
+  await testCancelWhileBinding();
+  console.log('MJPEG parser, landscape mapping, radar units/thresholds/validity, LAN binding, control timing and safe stream recovery: OK');
 })().catch(error => { console.error(error); process.exitCode = 1; });
