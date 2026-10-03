@@ -46,6 +46,7 @@ struct Index {
   private connectionGeneration: number = 0;
   private reconnectTimer: number = -1;
   private reconnectAttempt: number = 0;
+  private readonly maxReconnectAttempts: number = 3;
   private connectionNotice: string = '连接小车';
   private startupConnectionAttempted: boolean = false;
   private connectionPreferences: preferences.Preferences | null = null;
@@ -65,7 +66,7 @@ struct Index {
   @State connected: boolean = false;
   @State connecting: boolean = false;
   @State connectionWanted: boolean = false;
-  @State message: string = '连接小车 Wi-Fi 后输入车端地址';
+  @State message: string = '连接小车Wi-Fi后输入车端地址';
   @State cameraFrame: image.PixelMap | undefined = undefined;
   @State previewFps: number = 0;
   @State cameraStatus: string = 'waiting';
@@ -295,7 +296,7 @@ struct Index {
       if (current !== this.connectionGeneration || this.disposed) { return; }
       const status: PhoneStatus = await this.api.status();
       if (current !== this.connectionGeneration || this.disposed) { return; }
-      if (status.mode !== 'phone') { throw new Error('车端未进入 phone 模式'); }
+      if (status.mode !== 'phone') { throw new Error('车端未进入phone模式'); }
       this.bootId = status.bootId;
       this.previewReady = false;
       this.failures = 0;
@@ -312,7 +313,7 @@ struct Index {
           if (!this.previewReady) {
             this.previewReady = true;
             this.reconnectAttempt = 0;
-            this.message = '已连接 · 手机手动模式';
+            this.message = '已连接';
             this.rememberConnection();
             this.showConnectionToast(`${this.connectionNotice}成功`);
           }
@@ -435,25 +436,33 @@ struct Index {
   }
 
   private connectionLost(text: string): void {
-    // Only a connection that delivered live video gets one recovery attempt.
-    // Failed startup/manual connections and failed recovery never retry in a loop.
-    const recover = this.connectionWanted && !this.disposed && this.previewReady && this.reconnectAttempt < 1;
+    // Start recovery only after live video, then allow bounded retries while
+    // the server restarts. Manual/startup failures still require user action.
+    const recovering = this.connectionNotice === '自动重连' && this.reconnectAttempt > 0;
+    const recover = this.connectionWanted && !this.disposed &&
+      (this.previewReady || recovering) && this.reconnectAttempt < this.maxReconnectAttempts;
     const failedBeforeFrame = !this.previewReady;
     const notice = this.connectionNotice;
+    hilog.warn(0xA57A, 'AstraConnection',
+      'connection lost: %{public}s; ready=%{public}s attempt=%{public}s',
+      text, this.previewReady.toString(), this.reconnectAttempt.toString());
     this.disconnect();
     this.connectionWanted = recover;
-    this.message = recover ? `${text}，正在自动重连一次…` :
+    this.message = recover ? `${text}，正在尝试恢复连接…` :
       (failedBeforeFrame ? `${notice}失败：${text}，请手动连接` : text);
     this.showConnectionToast(this.message);
     if (recover) {
       const current = this.connectionGeneration;
       this.reconnectAttempt++;
+      const delayMs = this.reconnectAttempt === 1 ? 500 : (this.reconnectAttempt === 2 ? 2000 : 4000);
+      hilog.info(0xA57A, 'AstraConnection', 'recovery attempt=%{public}s delayMs=%{public}s',
+        this.reconnectAttempt.toString(), delayMs.toString());
       this.reconnectTimer = setTimeout(() => {
         this.reconnectTimer = -1;
         if (current === this.connectionGeneration && this.connectionWanted && !this.disposed) {
           this.connect(true);
         }
-      }, 500);
+      }, delayMs);
     }
   }
 
@@ -671,9 +680,9 @@ struct Index {
             .width('100%').height(48).backgroundColor($r('app.color.input_background')).borderRadius(13)
             .fontColor($r('app.color.text_primary')).enabled(!this.connectionWanted)
             .onChange((value: string) => this.endpoint = value)
-          Text('手机与小车连接同一 Wi-Fi，填写车端 IP 和端口，例如 http://192.168.8.204:8080。')
+          Text('请连接小车Wi-Fi并填写车端IP和端口，默认http://192.168.8.204:8080')
             .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
-          Button(this.connectionWanted ? (this.connected ? '断开连接' : '取消连接') : '测试连接并连接')
+          Button(this.connectionWanted ? (this.connected ? '断开连接' : '取消连接') : '连接')
             .width('100%').height(48).fontColor($r('app.color.white'))
             .backgroundColor(this.connectionWanted ? $r('app.color.danger') : $r('app.color.accent_green'))
             .borderRadius(14)
@@ -697,7 +706,7 @@ struct Index {
             .backgroundColor($r('app.color.camera_background')).borderRadius(14).clip(true)
           RadarOverlay({ scanning: this.lidarReady, points: this.lidarPoints,
             frontMm: this.frontMm, leftMm: this.sector270Mm, rightMm: this.sector90Mm })
-          Text(`原始读数 · 左 ${RadarPresentation.rawText(this.sector270Mm)} / ` +
+          Text(`雷达读数 左 ${RadarPresentation.rawText(this.sector270Mm)} / ` +
             `前 ${RadarPresentation.rawText(this.frontMm)} / 右 ${RadarPresentation.rawText(this.sector90Mm)}`)
             .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
           Text(this.radarFreshness)
@@ -865,7 +874,7 @@ struct Index {
           onSpeedChange: (value: number) => this.changeSpeed(value),
           onUnavailable: () => this.showUnavailable() })
           .opacity(this.homeAnimStep3).translate({ y: this.homeAnimStep3 ? 0 : 20 })
-        Button('停车 · 急停')
+        Button('STOP')
           .width('100%').height(40).fontSize(14).fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.white')).backgroundColor($r('app.color.danger')).borderRadius(13)
           .onClick(() => { Haptics.hard(); this.emergencyStop(); })

@@ -70,7 +70,7 @@ const Index = load(indexSource, 'Index', {
   '../services/PhoneApi': { PhoneApi },
   '../services/RadarPresentation': { RadarPresentation },
   '@kit.ArkData': { preferences: { getPreferencesSync: () => connectionPreferences } },
-  '@kit.PerformanceAnalysisKit': { hilog: { debug: () => {}, warn: () => {} } }
+  '@kit.PerformanceAnalysisKit': { hilog: { debug: () => {}, info: () => {}, warn: () => {} } }
 });
 
 function testRadarReadings() {
@@ -319,6 +319,94 @@ async function testLateStatusCannotAffectNewConnection() {
   p.disconnect();
   await p.connectionCleanup;
 }
+
+async function testRecoverySurvivesEarlyServerRefusal() {
+  const api = withConnection(apiMock());
+  const healthyStatus = api.status;
+  const p = page(api);
+  let frame, failure, starts = 0;
+  p.connected = false;
+  p.cameraStream.start = (_url, onFrame, _onRate, onFailure) => {
+    starts++; frame = onFrame; failure = onFailure;
+  };
+  try {
+    await p.connect();
+    frame({});
+    await p.beginAction('w', true);
+    const oldSession = p.sessionId;
+    let probes = 0;
+    api.status = async () => {
+      if (++probes === 1) { throw new Error('server restarting'); }
+      return healthyStatus();
+    };
+    failure('service unavailable');
+    await delay(560);
+    assert.equal(probes, 1);
+    assert.equal(p.connected, false, 'failed first retry keeps controls offline');
+    assert.ok(p.reconnectTimer >= 0, 'server startup gets another bounded chance');
+    assert.ok(api.calls.some(c => c[0] === 'stop' && c[1] === oldSession));
+    await delay(2200);
+    assert.equal(starts, 2, 'preview opens when the server is ready after initial refusal');
+    assert.equal(p.connected, true);
+    assert.equal(p.previewReady, false);
+    frame({});
+    assert.equal(p.reconnectAttempt, 0, 'fresh video ends the recovery episode');
+    assert.equal(api.calls.filter(c => c[0] === 'command').length, 1, 'held command is never replayed');
+  } finally { p.onPageHide(); await p.connectionCleanup; }
+}
+
+async function testRecoveryExhaustsAndManualFailuresDoNotLoop() {
+  const api = withConnection(apiMock());
+  const p = page(api);
+  let frame, failure;
+  p.connected = false;
+  p.cameraStream.start = (_url, onFrame, _onRate, onFailure) => { frame = onFrame; failure = onFailure; };
+  try {
+    await p.connect();
+    frame({});
+    let probes = 0;
+    api.status = async () => { probes++; throw new Error('server remains offline'); };
+    failure('offline');
+    await delay(560);
+    assert.equal(probes, 1);
+    await delay(2100);
+    assert.equal(probes, 2);
+    await delay(4100);
+    assert.equal(probes, 3, 'recovery has a finite request bound');
+    assert.equal(p.connectionWanted, false);
+    assert.equal(p.reconnectTimer, -1);
+    assert.equal(p.connected, false);
+    assert.match(p.message, /请手动连接/);
+    await delay(600);
+    assert.equal(probes, 3, 'exhaustion does not schedule an endless loop');
+    await p.connect();
+    await delay(600);
+    assert.equal(probes, 4, 'manual connection failure never starts automatic recovery');
+    assert.equal(p.reconnectTimer, -1);
+  } finally { p.onPageHide(); await p.connectionCleanup; }
+}
+
+async function testBackgroundCancelsLaterRecoveryAttempt() {
+  const api = withConnection(apiMock());
+  const p = page(api);
+  let frame, failure;
+  p.connected = false;
+  p.cameraStream.start = (_url, onFrame, _onRate, onFailure) => { frame = onFrame; failure = onFailure; };
+  try {
+    await p.connect();
+    frame({});
+    let probes = 0;
+    api.status = async () => { probes++; throw new Error('server restarting'); };
+    failure('offline');
+    await delay(560);
+    assert.equal(probes, 1);
+    p.onPageHide();
+    await delay(2200);
+    assert.equal(probes, 1, 'background cancels the pending later retry');
+    assert.equal(p.reconnectTimer, -1);
+    assert.equal(p.connectionWanted, false);
+  } finally { p.onPageHide(); await p.connectionCleanup; }
+}
 async function testCancelWhileBinding() {
   const api = withConnection(apiMock());
   const p = page(api);
@@ -346,6 +434,9 @@ async function testCancelWhileBinding() {
   await testLateSpeedAfterStop();
   await testRouteBeforeStream();
   await testStreamRecoveryNeverResumesMotion();
+  await testRecoverySurvivesEarlyServerRefusal();
+  await testRecoveryExhaustsAndManualFailuresDoNotLoop();
+  await testBackgroundCancelsLaterRecoveryAttempt();
   await testLateStatusCannotAffectNewConnection();
   await testCancelWhileBinding();
   console.log('MJPEG parser, landscape mapping, radar units/thresholds/validity, LAN binding, control timing and safe stream recovery: OK');

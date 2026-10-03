@@ -1,0 +1,234 @@
+{
+  "updated_at": "2026-10-03T13:46:47.327649+08:00",
+  "overall_goal_complete": false,
+  "remaining_issue": "GL wireless periodic interruptions remain; current router configuration and logs require administrator access, unavailable in this session.",
+  "implementation": {
+    "file": "entry/src/main/ets/pages/Index.ets",
+    "max_automatic_retries_after_live_video": 3,
+    "retry_delays_ms": [
+      500,
+      2000,
+      4000
+    ],
+    "manual_and_startup_failures_auto_retry": false,
+    "fresh_video_required_before_motion": true,
+    "background_and_manual_disconnect_cancel_retries": true,
+    "old_motion_commands_replayed": false,
+    "video_watchdog_ms": 2000
+  },
+  "offline_validation": {
+    "hap_build": "passed",
+    "phone_control_and_recovery_regression": "passed",
+    "camera_stream_regression": "passed",
+    "diff_check": "passed",
+    "new_regression_cases": [
+      "server unavailable during first recovery attempt",
+      "finite retries and manual failure without loops",
+      "background cancels a later pending retry"
+    ]
+  },
+  "installed_hap": {
+    "path": "/Users/raychen/Develop/AstraPlusCar/AstraPlusCar-HarmonyOS/entry/build/default/outputs/default/entry-default-signed.hap",
+    "bytes": 1155830,
+    "sha256": "3916215977783a3c2e040351a5bfd2ce4c0f71912bd7eb7dc26b34210b4de031",
+    "phone_target": "MJE0223906038678",
+    "observed_app_pid": 24476
+  },
+  "real_service_restart_recovery": {
+    "start_epoch": 1791005202.935509,
+    "started_at": "2026-10-03T13:26:42.935509+08:00",
+    "capture_pid": 75647,
+    "planned_idle_service_restart": true,
+    "motion_commands_sent": false,
+    "recovery_attempt_logs": [
+      "1791005203.894 24476 24476 I A0A57A/top.rayawa.astra_plus_car/AstraConnection: recovery attempt=1 delayMs=500",
+      "1791005204.448 24476 24476 I A0A57A/top.rayawa.astra_plus_car/AstraConnection: recovery attempt=2 delayMs=2000",
+      "1791005206.511 24476 24476 I A0A57A/top.rayawa.astra_plus_car/AstraConnection: recovery attempt=3 delayMs=4000"
+    ],
+    "post_restart_preview_start_epoch": 1791005210.577,
+    "first_resumed_fps_log": "1791005211.591 24476 24476 I A00000/top.rayawa.astra_plus_car/AstraCamera: decoded fps=27.6 maxGap=122 frameErrors=0",
+    "resumed_fps_report_count": 2,
+    "recovered_without_manual_connect": true,
+    "device": {
+      "before_boot_id": "ffbde771bb8f4c6f81640152248d47fe",
+      "after_status": {
+        "server_time": "2024-12-26T19:22:02+08:00",
+        "camera": {
+          "status": "live",
+          "frame_time": "2024-12-26T19:22:02+08:00",
+          "age_ms": 29
+        },
+        "lidar": {
+          "observed_at": "2024-12-26T19:22:02+08:00",
+          "serial": "89DFED95C4E493CAA5E69EF0180F4B6E",
+          "health": "OK",
+          "status": "scanning",
+          "points": 1748,
+          "nearest_mm": 100.0,
+          "front_nearest_mm": 1134.0,
+          "sector_90_mm": 1534.0,
+          "sector_180_mm": 100.0,
+          "sector_270_mm": 238.0,
+          "age_seconds": 0.22
+        },
+        "bootId": "29ad02c9050e46548fc150af2c7ae162",
+        "mode": "phone",
+        "speed": 40,
+        "moving": false,
+        "controlBusy": false
+      },
+      "service": {
+        "MainPID": "114691",
+        "NRestarts": "0",
+        "ActiveState": "active"
+      },
+      "restart_duration_seconds": 4.615252061999854,
+      "planned_restart_for_recovery_test": true
+    },
+    "completed_at": "2026-10-03T13:26:52.746711+08:00"
+  },
+  "real_background_cancellation": {
+    "start_epoch": 1791005342.9550169,
+    "started_at": "2026-10-03T13:29:02.955017+08:00",
+    "motion_commands_sent": false,
+    "planned_idle_service_restart": true,
+    "home_command_completed_epoch": 1791005344.473196,
+    "foreground_command_completed_epoch": 1791005352.78419,
+    "background_lifecycle_log": "1791005344.413 24476 24476 I A0A57A/top.rayawa.astra_plus_car/AstraDrive: Ability onBackground",
+    "foreground_lifecycle_log": "1791005352.866 24476 24476 I A0A57A/top.rayawa.astra_plus_car/AstraDrive: [a92ab192a8bbc4d 3c1fd7 1fedb6]Ability onForeground",
+    "later_retry_or_preview_logs": [],
+    "recovery_attempt_logs": [
+      "1791005343.924 24476 24476 I A0A57A/top.rayawa.astra_plus_car/AstraConnection: recovery attempt=1 delayMs=500"
+    ],
+    "pending_recovery_cancelled_across_foreground": true,
+    "device": {
+      "before_boot_id": "29ad02c9050e46548fc150af2c7ae162",
+      "after_status": {
+        "server_time": "2024-12-26T19:24:22+08:00",
+        "camera": {
+          "status": "live",
+          "frame_time": "2024-12-26T19:24:22+08:00",
+          "age_ms": 28
+        },
+        "lidar": {
+          "observed_at": "2024-12-26T19:24:22+08:00",
+          "serial": "89DFED95C4E493CAA5E69EF0180F4B6E",
+          "health": "OK",
+          "status": "scanning",
+          "points": 1454,
+          "nearest_mm": 100.0,
+          "front_nearest_mm": 1134.0,
+          "sector_90_mm": 684.0,
+          "sector_180_mm": 100.0,
+          "sector_270_mm": 238.0,
+          "age_seconds": 0.32
+        },
+        "bootId": "adbc8910bae2402398d43c741982a848",
+        "mode": "phone",
+        "speed": 40,
+        "moving": false,
+        "controlBusy": false
+      },
+      "service": {
+        "MainPID": "116449",
+        "NRestarts": "0",
+        "ActiveState": "active"
+      },
+      "restart_duration_seconds": 4.619050502999016,
+      "planned_restart_for_recovery_test": true
+    },
+    "completed_at": "2026-10-03T13:29:15.822814+08:00"
+  },
+  "final_device": {
+    "service": {
+      "MainPID": "116449",
+      "NRestarts": "0",
+      "ActiveState": "active"
+    },
+    "source_sha256": "6e29ed3145ba2245ef6b9eb4c94aad89ff9f9f88e077c9b6f0207332ec43783a",
+    "status": {
+      "server_time": "2024-12-26T19:29:40+08:00",
+      "camera": {
+        "status": "live",
+        "frame_time": "2024-12-26T19:29:40+08:00",
+        "age_ms": 144
+      },
+      "lidar": {
+        "observed_at": "2024-12-26T19:29:39+08:00",
+        "serial": "89DFED95C4E493CAA5E69EF0180F4B6E",
+        "health": "OK",
+        "status": "scanning",
+        "points": 4227,
+        "nearest_mm": 100.0,
+        "front_nearest_mm": 1116.0,
+        "sector_90_mm": 538.0,
+        "sector_180_mm": 100.0,
+        "sector_270_mm": 151.0,
+        "age_seconds": 0.83
+      },
+      "bootId": "adbc8910bae2402398d43c741982a848",
+      "mode": "phone",
+      "speed": 40,
+      "moving": false,
+      "controlBusy": false
+    }
+  },
+  "motion_commands_sent": false,
+  "router_configuration_modified": false,
+  "sources": {
+    "timer": "https://developer.huawei.com/consumer/cn/doc/harmonyos-references-V14/js-apis-timer-V14",
+    "background_page_lifecycle": "https://developer.huawei.com/consumer/cn/doc/doccenter-dev-faq/faqs-media-4"
+  },
+  "evidence_archive": {
+    "path": "/Users/raychen/Develop/AstraPlusCar/diagnostics/APP_RECOVERY_TEST_2026-10-03_132642.zip",
+    "sha256": "744e359a897974c7653d68c55ee5a952133aa2c3c58e309db5a972a34a8a6e87"
+  },
+  "closeout_device": {
+    "service": {
+      "MainPID": "116449",
+      "NRestarts": "0",
+      "ActiveState": "active"
+    },
+    "source_sha256": "6e29ed3145ba2245ef6b9eb4c94aad89ff9f9f88e077c9b6f0207332ec43783a",
+    "status": {
+      "server_time": "2024-12-26T19:41:07+08:00",
+      "camera": {
+        "status": "live",
+        "frame_time": "2024-12-26T19:41:07+08:00",
+        "age_ms": 31
+      },
+      "lidar": {
+        "observed_at": "2024-12-26T19:41:06+08:00",
+        "serial": "89DFED95C4E493CAA5E69EF0180F4B6E",
+        "health": "OK",
+        "status": "scanning",
+        "points": 4314,
+        "nearest_mm": 100.0,
+        "front_nearest_mm": 596.0,
+        "sector_90_mm": 862.0,
+        "sector_180_mm": 100.0,
+        "sector_270_mm": 256.0,
+        "age_seconds": 0.69
+      },
+      "bootId": "adbc8910bae2402398d43c741982a848",
+      "mode": "phone",
+      "speed": 40,
+      "moving": false,
+      "controlBusy": false
+    }
+  },
+  "closeout_phone": {
+    "latest_fps_log": "1791006351.050 24476 24476 I A00000/top.rayawa.astra_plus_car/AstraCamera: decoded fps=29.9 maxGap=69 frameErrors=0",
+    "short_window_only": true,
+    "proof_of_continuous_30_fps": false
+  },
+  "router_access_closeout": {
+    "checked_at": "2026-10-03T13:46:47.327649+08:00",
+    "management_url": "http://192.168.8.1/#/login",
+    "observed_state": "administrator password login page",
+    "authenticated": false,
+    "user_confirmed_access_unavailable": true,
+    "router_settings_changed": false,
+    "pending_action": "Read actual repeater configuration and radio logs when legitimate management access becomes available; investigate wireless interruptions."
+  }
+}
