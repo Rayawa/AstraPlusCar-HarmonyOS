@@ -39,7 +39,7 @@ export struct RadarOverlay {
   build() {
     Column({ space: 4 }) {
       Row() {
-        Text(this.scanning ? `雷达 · 距离 m · ${this.points} 点` : '雷达暂无有效数据')
+        Text(this.scanning ? `雷达 ${this.points}点` : '雷达暂无有效数据')
           .fontSize(9).fontColor(Color.White).maxLines(1)
       }.width('100%')
       Row({ space: 4 }) {
