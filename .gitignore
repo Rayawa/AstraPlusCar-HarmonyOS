@@ -12,3 +12,6 @@
 /.appanalyzer
 __pycache__/
 *.py[cod]
+
+# Local signing configuration; never commit credentials.
+/build-profile.json5
