@@ -7,22 +7,33 @@ import { CaptureStore, CaptureItem } from '../services/CaptureStore';
 import { ConnectionIndicators } from '../components/ConnectionIndicators';
 import { DriveControls } from '../components/DriveControls';
 import { LandscapeControlPad } from '../components/LandscapeControlPad';
-import { RadarOverlay } from '../components/RadarOverlay';
 import { RadarWarningHud } from '../components/RadarWarningHud';
-import { RadarPresentation } from '../services/RadarPresentation';
+import { RadarPresentation, RadarReadings } from '../services/RadarPresentation';
 import { CaptureGallery } from '../components/CaptureGallery';
 import { PhoneApi, PhoneStatus, PhoneSession, PhoneResult } from '../services/PhoneApi';
 import { LocalNetworkRoute } from '../services/LocalNetworkRoute';
 import { Haptics } from '../services/Haptics';
+import { RadarHaptics } from '../services/RadarHaptics';
 import { image } from '@kit.ImageKit';
 import { CameraStream } from '../services/CameraStream';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { VoiceRecognition } from '../services/VoiceRecognition';
+import { VoiceCommands, VoiceCommand, VoicePlan } from '../services/VoiceCommands';
+import { VoiceControlPanel } from '../components/VoiceControlPanel';
+import { VoiceModeGlow } from '../components/VoiceModeGlow';
 
 @Entry
 @Component
 struct Index {
   private readonly api: PhoneApi = new PhoneApi();
   private readonly cameraStream: CameraStream = new CameraStream();
+  private readonly voiceRecognition: VoiceRecognition = new VoiceRecognition();
+  private voiceGeneration: number = 0;
+  private voiceCommandGeneration: number = 0;
+  private voiceMotionTimer: number = -1;
+  private voiceQueueRunning: boolean = false;
+  private voiceQueueCommands: VoiceCommand[] = [];
+  private voiceQueueIndex: number = 0;
   private readonly networkRoute: LocalNetworkRoute = new LocalNetworkRoute();
   private readonly pageStack: NavPathStack = new NavPathStack();
   private readonly connectionScroller: Scroller = new Scroller();
@@ -93,13 +104,30 @@ struct Index {
   @State viewportHeight: number = 0;
   @State landscapeContentWidth: number = 0;
   @State landscapeContentHeight: number = 0;
+  @State portraitPreviewWidth: number = 352;
+  @State connectionPreviewWidth: number = 352;
   @State isLandscape: boolean = false;
+  @State voiceMode: boolean = false;
+  @State voiceListening: boolean = false;
+  @State voiceTranscript: string = '';
+  @State voiceCommandText: string = '';
+  @State voicePlanText: string = '';
 
   private updateViewport(width: number, height: number): void {
     if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) { return; }
     const landscape: boolean = width > height;
-    if (landscape !== this.isLandscape && this.pressedKey.length > 0) {
-      this.endAction(this.pressedKey);
+    if (landscape !== this.isLandscape) {
+      if (this.voiceMode && (this.voiceQueueRunning || this.pressedKey.length > 0)) {
+        this.cancelVoiceCommand();
+        ++this.controlGeneration;
+        this.pressedKey = '';
+        this.resetVoiceSpeed();
+        this.stopCurrent();
+        this.voiceRecognition.discardPending();
+        this.voiceCommandText = '画面方向已切换，已发送停车指令';
+      } else if (this.pressedKey.length > 0) {
+        this.endAction(this.pressedKey);
+      }
     }
     this.viewportWidth = width;
     this.viewportHeight = height;
@@ -231,6 +259,7 @@ struct Index {
 
   private openGallery(): void {
     if (this.pageStack.size() > 0) { return; }
+    this.exitVoiceMode(false);
     // The driving surface is hidden by a destination, so release any held command first.
     ++this.controlGeneration;
     this.pressedKey = '';
@@ -241,6 +270,239 @@ struct Index {
 
   onPageHide(): void {
     this.disconnect();
+  }
+
+  onBackPress(): boolean {
+    if (this.voiceMode && !this.showConnection && this.pageStack.size() === 0) {
+      this.exitVoiceMode();
+      return true;
+    }
+    return false;
+  }
+
+  private openConnectionSheet(): void {
+    this.exitVoiceMode(false);
+    this.showConnection = true;
+  }
+
+  private clearVoiceMotion(): void {
+    if (this.voiceMotionTimer >= 0) { clearTimeout(this.voiceMotionTimer); this.voiceMotionTimer = -1; }
+  }
+
+  private cancelVoiceCommand(): void {
+    ++this.voiceCommandGeneration;
+    this.voiceQueueRunning = false;
+    this.voiceQueueCommands = [];
+    this.voiceQueueIndex = 0;
+    this.clearVoiceMotion();
+  }
+
+  private resetVoiceSpeed(): void {
+    this.speedPending = false;
+    this.speedDesired = this.speed;
+    this.sliderSpeed = this.speed;
+    if (this.speedTimer >= 0) { clearTimeout(this.speedTimer); this.speedTimer = -1; }
+  }
+
+  private exitVoiceMode(feedback: boolean = true): void {
+    if (!this.voiceMode) { return; }
+    ++this.voiceGeneration;
+    this.cancelVoiceCommand();
+    this.voiceMode = false;
+    this.voiceListening = false;
+    this.voiceRecognition.stop();
+    ++this.controlGeneration;
+    this.pressedKey = '';
+    this.speedPending = false;
+    this.speedDesired = this.speed;
+    this.sliderSpeed = this.speed;
+    if (this.speedTimer >= 0) { clearTimeout(this.speedTimer); this.speedTimer = -1; }
+    this.stopCurrent();
+    if (feedback) { Haptics.hard(); }
+    if (!this.disposed) { this.message = '已退出语音模式，已发送停车指令'; }
+  }
+
+  private async toggleVoiceMode(): Promise<void> {
+    if (this.voiceMode) { this.exitVoiceMode(); return; }
+    Haptics.hard();
+    if (!this.connected || !this.previewReady) { this.showUnavailable(); return; }
+    const current = ++this.voiceGeneration;
+    this.cancelVoiceCommand();
+    this.voiceMode = true;
+    this.voiceListening = false;
+    this.voiceTranscript = '';
+    this.voicePlanText = '';
+    this.voiceCommandText = '正在启动离线语音识别…';
+    ++this.controlGeneration;
+    this.pressedKey = '';
+    this.speedPending = false;
+    this.speedDesired = this.speed;
+    this.sliderSpeed = this.speed;
+    if (this.speedTimer >= 0) { clearTimeout(this.speedTimer); this.speedTimer = -1; }
+    await this.stopCurrent();
+    if (!this.voiceMode || current !== this.voiceGeneration || this.disposed) { return; }
+    try {
+      await this.voiceRecognition.start(this.getUIContext().getHostContext() as common.UIAbilityContext, {
+        onListening: () => {
+          if (!this.voiceMode || current !== this.voiceGeneration) { return; }
+          this.voiceListening = true;
+          if (this.voiceCommandText === '正在启动离线语音识别…') { this.voiceCommandText = '等待指令'; }
+        },
+        onText: (text: string, final: boolean) => {
+          if (!this.voiceMode || current !== this.voiceGeneration) { return; }
+          this.voiceTranscript = text;
+          if (final) { this.executeVoiceCommand(text); }
+        },
+        onError: (reason: string) => {
+          if (!this.voiceMode || current !== this.voiceGeneration) { return; }
+          this.exitVoiceMode();
+          this.message = reason;
+          this.showConnectionToast(reason);
+        }
+      });
+    } catch (error) {
+      if (!this.voiceMode || current !== this.voiceGeneration) { return; }
+      this.exitVoiceMode();
+      this.message = (error as Error).message;
+      this.showConnectionToast(this.message);
+    }
+  }
+
+  private async executeVoiceCommand(text: string): Promise<void> {
+    if (!this.voiceMode || !this.voiceListening) { return; }
+    const plan: VoicePlan = VoiceCommands.parsePlan(text);
+    if (plan.error.length > 0) { this.voiceCommandText = `未执行：${plan.error}`; return; }
+    const command: VoiceCommand = plan.commands[0];
+    if (plan.commands.length === 1 && command.kind === 'exit') { this.exitVoiceMode(); return; }
+    if (plan.commands.length === 1 && command.kind === 'stop') { Haptics.hard(); this.emergencyStop(); return; }
+    if (!this.connected || !this.previewReady) { this.voiceCommandText = '未执行：小车或画面未就绪'; return; }
+    const mode = this.voiceGeneration;
+    if (this.voiceQueueRunning && VoiceCommands.isContinuation(text) &&
+      !plan.commands.some((step: VoiceCommand) => step.kind === 'stop' || step.kind === 'exit')) {
+      const extended = VoiceCommands.parsePlan(`${this.voicePlanText}，${text}`.replace(/ → /g, '，'));
+      if (extended.error.length > 0) { this.voiceCommandText = `未追加：${extended.error}`; return; }
+      plan.commands.forEach((step: VoiceCommand) => this.voiceQueueCommands.push(step));
+      this.voicePlanText = this.voiceQueueCommands.map((step: VoiceCommand) => step.label).join(' → ');
+      this.voiceCommandText = `已追加 ${plan.commands.length} 步；${this.voiceQueueIndex + 1}/${this.voiceQueueCommands.length} · ` +
+        this.voiceQueueCommands[this.voiceQueueIndex].label;
+      return;
+    }
+    // A single speed/capture request may supplement an active motion without removing its deadline.
+    if (plan.commands.length === 1 && this.voiceMotionTimer >= 0 &&
+      (command.kind === 'capture' || command.kind === 'speed' || command.kind === 'speedStep')) {
+      await this.performVoiceOperation(command, mode, this.voiceCommandGeneration, '');
+      return;
+    }
+    this.cancelVoiceCommand();
+    const current = this.voiceCommandGeneration;
+    this.voiceQueueRunning = true;
+    this.voiceQueueCommands = plan.commands;
+    this.voicePlanText = plan.commands.map((step: VoiceCommand) => step.label).join(' → ');
+    ++this.controlGeneration;
+    this.pressedKey = '';
+    this.resetVoiceSpeed();
+    const stopped = await this.stopCurrent();
+    if (!this.voicePlanValid(mode, current)) { return; }
+    if (!stopped) { this.failVoicePlan(this.message, mode, current); return; }
+    await this.runVoiceStep(plan.commands, 0, mode, current);
+  }
+
+  private voicePlanValid(mode: number, current: number): boolean {
+    return this.voiceMode && this.voiceListening && this.connected && this.previewReady && !this.disposed &&
+      mode === this.voiceGeneration && current === this.voiceCommandGeneration;
+  }
+
+  private failVoicePlan(reason: string, mode: number, current: number): void {
+    if (!this.voicePlanValid(mode, current)) { return; }
+    this.cancelVoiceCommand();
+    ++this.controlGeneration;
+    this.pressedKey = '';
+    this.resetVoiceSpeed();
+    this.stopCurrent();
+    this.voiceCommandText = `${reason}；后续指令已取消`;
+  }
+
+  private async runVoiceStep(commands: VoiceCommand[], index: number, mode: number, current: number): Promise<void> {
+    if (!this.voicePlanValid(mode, current)) { return; }
+    if (index >= commands.length) {
+      this.voiceQueueRunning = false;
+      if (commands.length > 1) { this.voiceCommandText = `已完成全部 ${commands.length} 条指令`; }
+      return;
+    }
+    const command = commands[index];
+    this.voiceQueueIndex = index;
+    const progress = commands.length > 1 ? `${index + 1}/${commands.length} · ` : '';
+    if (command.kind === 'exit') { this.exitVoiceMode(); return; }
+    if (command.kind === 'move') {
+      this.voiceCommandText = `${progress}执行中：${command.label}`;
+      await this.beginAction(command.key, true);
+      if (!this.voicePlanValid(mode, current)) { return; }
+      if (this.activeKey !== command.key) { this.failVoicePlan(this.message, mode, current); return; }
+      Haptics.soft();
+      this.voiceCommandText = `${progress}已执行：${command.label}`;
+      this.voiceMotionTimer = setTimeout(() => {
+        this.voiceMotionTimer = -1;
+        this.finishVoiceMotion(commands, index, mode, current);
+      }, command.value);
+      return;
+    }
+    const accepted = await this.performVoiceOperation(command, mode, current, progress);
+    if (!this.voicePlanValid(mode, current)) { return; }
+    if (!accepted) { this.failVoicePlan(this.voiceCommandText, mode, current); return; }
+    await this.runVoiceStep(commands, index + 1, mode, current);
+  }
+
+  private async finishVoiceMotion(commands: VoiceCommand[], index: number, mode: number, current: number): Promise<void> {
+    if (!this.voicePlanValid(mode, current)) { return; }
+    ++this.controlGeneration;
+    this.pressedKey = '';
+    this.resetVoiceSpeed();
+    // Wait for the stop acknowledgement before starting any subsequent motion.
+    const stopped = await this.stopCurrent();
+    if (!this.voicePlanValid(mode, current)) { return; }
+    if (!stopped) { this.failVoicePlan(this.message, mode, current); return; }
+    this.voiceCommandText = `${commands[index].label} · 已停车`;
+    Haptics.soft();
+    await this.runVoiceStep(commands, index + 1, mode, current);
+  }
+
+  private async performVoiceOperation(command: VoiceCommand, mode: number, current: number,
+    progress: string): Promise<boolean> {
+    if (!this.voicePlanValid(mode, current)) { return false; }
+    if (command.kind === 'stop') {
+      this.voiceRecognition.discardPending();
+      ++this.controlGeneration;
+      this.pressedKey = '';
+      this.resetVoiceSpeed();
+      const stopped = await this.stopCurrent();
+      if (!this.voicePlanValid(mode, current)) { return false; }
+      this.voiceCommandText = stopped ? `${progress}已执行：停车` : this.message;
+      if (stopped) { Haptics.hard(); }
+      return stopped;
+    }
+    if (command.kind === 'capture') {
+      if (this.captureBusy) { this.voiceCommandText = '截图保存中，请稍后重试'; return false; }
+      this.voiceCommandText = `${progress}执行中：截图`;
+      const saved = await this.capture();
+      if (!this.voicePlanValid(mode, current)) { return false; }
+      this.voiceCommandText = saved ? `${progress}已执行：截图已保存` : this.message;
+      if (saved) { Haptics.soft(); }
+      return saved;
+    }
+    if (this.speedBusy || (this.pressedKey.length > 0 && this.commandId.length === 0)) {
+      this.voiceCommandText = '控制指令正在提交，请稍后调速'; return false;
+    }
+    const target = command.kind === 'speedStep' ?
+      Math.max(0, Math.min(100, this.speed + command.value)) : command.value;
+    this.speedDesired = target;
+    this.sliderSpeed = target;
+    this.speedPending = true;
+    this.voiceCommandText = `${progress}执行中：速度 ${target}`;
+    const accepted = await this.flushSpeed();
+    if (!this.voicePlanValid(mode, current)) { return false; }
+    this.voiceCommandText = accepted ? `${progress}已执行：速度 ${this.speed}` : this.message;
+    if (accepted) { Haptics.soft(); }
+    return accepted;
   }
 
   private nextId(): string {
@@ -370,6 +632,7 @@ struct Index {
     }
     this.cameraStatus = status.camera.status;
     const radar = RadarPresentation.read(status.lidar);
+    this.radarFeedback(radar);
     this.lidarPoints = radar.points;
     this.frontMm = radar.frontMm;
     this.sector90Mm = radar.rightMm;
@@ -381,12 +644,35 @@ struct Index {
         `最近扫描 ${age.toFixed(1)} 秒前` : '扫描已更新');
   }
 
+  private radarFeedback(radar: RadarReadings): void {
+    if (!this.connected || this.disposed || !radar.ready) { return; }
+    const previous: number[] = [
+      RadarPresentation.level(this.frontMm, this.lidarReady),
+      RadarPresentation.level(this.sector270Mm, this.lidarReady),
+      RadarPresentation.level(this.sector90Mm, this.lidarReady)
+    ];
+    const next: number[] = [
+      RadarPresentation.level(radar.frontMm, radar.ready),
+      RadarPresentation.level(radar.leftMm, radar.ready),
+      RadarPresentation.level(radar.rightMm, radar.ready)
+    ];
+    let feedback: number = 0;
+    for (let index = 0; index < next.length; index++) {
+      if (next[index] >= 2 && next[index] !== previous[index]) {
+        feedback = Math.max(feedback, next[index]);
+      }
+    }
+    // Merge simultaneous entries into one pulse, with red taking priority.
+    if (feedback === 3) { RadarHaptics.danger(); }
+    else if (feedback === 2) { RadarHaptics.warning(); }
+  }
+
   private stopRenewTimer(): void {
     if (this.renewTimer >= 0) { clearInterval(this.renewTimer); this.renewTimer = -1; }
     this.renewing = false;
   }
 
-  private async stopCurrent(): Promise<void> {
+  private async stopCurrent(): Promise<boolean> {
     this.stopRenewTimer();
     const oldSession = this.sessionId;
     this.sessionId = '';
@@ -397,11 +683,14 @@ struct Index {
         await this.api.stop(oldSession);
       } catch (error) {
         this.message = '停车响应失败，等待车端超时停车';
+        return false;
       }
     }
+    return true;
   }
 
   private disconnect(): void {
+    this.exitVoiceMode(false);
     ++this.connectionGeneration;
     this.connectionWanted = false;
     this.previewReady = false;
@@ -497,8 +786,9 @@ struct Index {
     if (held && this.pressedKey.length > 0) { return; }
     const current = ++this.controlGeneration;
     this.pressedKey = held ? key : '';
-    await this.stopCurrent();
+    const stopped = await this.stopCurrent();
     if (!this.connected || current !== this.controlGeneration) { return; }
+    if (this.voiceMode && !stopped) { this.pressedKey = ''; return; }
     try {
       const session = await this.ensureSession(current);
       if (!this.connected || current !== this.controlGeneration) {
@@ -511,6 +801,7 @@ struct Index {
         await this.api.stop(session);
         return;
       }
+      if (result.accepted === false) { throw new Error('车端未接受指令'); }
       this.speed = result.speed;
       this.activeKey = held || key === 'z' ? key : '';
       this.commandId = this.activeKey.length > 0 ? id : '';
@@ -565,6 +856,15 @@ struct Index {
   }
 
   private emergencyStop(): void {
+    if (this.voiceMode) {
+      this.cancelVoiceCommand();
+      this.voiceRecognition.discardPending();
+      this.speedPending = false;
+      this.speedDesired = this.speed;
+      this.sliderSpeed = this.speed;
+      if (this.speedTimer >= 0) { clearTimeout(this.speedTimer); this.speedTimer = -1; }
+      this.voiceCommandText = '已发送停车指令';
+    }
     if (!this.connected) { this.showUnavailable(); return; }
     ++this.controlGeneration;
     this.pressedKey = '';
@@ -587,19 +887,20 @@ struct Index {
     }
   }
 
-  private async flushSpeed(): Promise<void> {
-    if (!this.connected || this.speedBusy) { return; }
+  private async flushSpeed(): Promise<boolean> {
+    if (!this.connected || this.speedBusy) { return false; }
     // Let the initial movement command establish its lease before adjusting it.
-    if (this.pressedKey.length > 0 && this.commandId.length === 0) { return; }
+    if (this.pressedKey.length > 0 && this.commandId.length === 0) { return false; }
     this.speedBusy = true;
     const current = this.controlGeneration;
     const target = this.speedDesired;
     let accepted = false;
     try {
       const session = await this.ensureSession(current);
-      if (!this.connected || current !== this.controlGeneration) { return; }
+      if (!this.connected || current !== this.controlGeneration) { return false; }
       const result = await this.api.speed(session, ++this.serial, this.nextId(), target);
-      if (!this.connected || current !== this.controlGeneration || session !== this.sessionId) { return; }
+      if (!this.connected || current !== this.controlGeneration || session !== this.sessionId) { return false; }
+      if (result.accepted === false) { throw new Error('车端未接受调速指令'); }
       this.speed = result.speed;
       accepted = true;
       this.speedPending = this.speedDesired !== target;
@@ -611,7 +912,7 @@ struct Index {
         this.commandId = '';
       }
     } catch (error) {
-      if (current !== this.controlGeneration || !this.connected) { return; }
+      if (current !== this.controlGeneration || !this.connected) { return false; }
       this.message = `调速失败：${(error as Error).message}`;
       this.speedDesired = this.speed;
       this.speedPending = false;
@@ -622,6 +923,7 @@ struct Index {
       if (this.connected && this.speedDesired !== this.speed &&
         (accepted || current !== this.controlGeneration)) { this.flushSpeed(); }
     }
+    return accepted;
   }
 
   private showUnavailable(): void {
@@ -654,9 +956,9 @@ struct Index {
     } catch (error) { this.message = `下载失败：${(error as Error).message}`; }
   }
 
-  private async capture(): Promise<void> {
-    if (!this.connected) { this.showUnavailable(); return; }
-    if (this.captureBusy || !this.captureStore) { return; }
+  private async capture(): Promise<boolean> {
+    if (!this.connected) { this.showUnavailable(); return false; }
+    if (this.captureBusy || !this.captureStore) { return false; }
     this.captureBusy = true;
     try {
       const capture = await this.api.capture();
@@ -665,7 +967,8 @@ struct Index {
       this.captureStore.save(jpeg);
       this.refreshCaptures();
       this.message = '截图已保存到车端和应用图库';
-    } catch (error) { this.message = `截图保存失败：${(error as Error).message}`; }
+      return true;
+    } catch (error) { this.message = `截图保存失败：${(error as Error).message}`; return false; }
     finally { this.captureBusy = false; }
   }
 
@@ -691,7 +994,7 @@ struct Index {
         }.width('100%').alignItems(HorizontalAlign.Start)
           .opacity(this.connectionAnimStep1).translate({ y: this.connectionAnimStep1 ? 0 : 12 })
         ConnectionIndicators({ connected: this.connected, cameraReady: this.cameraStatus === 'live',
-          lidarReady: this.lidarReady })
+          lidarReady: this.lidarReady, voiceReady: this.voiceListening })
           .opacity(this.connectionAnimStep2).translate({ y: this.connectionAnimStep2 ? 0 : 12 })
         Column({ space: 8 }) {
           Text('视频预览 · 16:9').fontSize(13).fontWeight(FontWeight.Bold)
@@ -702,10 +1005,16 @@ struct Index {
             } else {
               Text('暂无预览').fontSize(12).fontColor($r('app.color.camera_hint'))
             }
+            RadarWarningHud({ scanning: this.lidarReady,
+              frontMm: this.frontMm, leftMm: this.sector270Mm, rightMm: this.sector90Mm,
+              pictureWidth: this.connectionPreviewWidth, pictureHeight: this.connectionPreviewWidth * 9 / 16,
+              ringWidth: this.connectionPreviewWidth * 0.62 })
           }.width('100%').aspectRatio(16 / 9)
             .backgroundColor($r('app.color.camera_background')).borderRadius(14).clip(true)
-          RadarOverlay({ scanning: this.lidarReady, points: this.lidarPoints,
-            frontMm: this.frontMm, leftMm: this.sector270Mm, rightMm: this.sector90Mm })
+            .onAreaChange((oldValue: Area, newValue: Area) => {
+              const width: number = Number(newValue.width);
+              if (Number.isFinite(width) && width > 0) { this.connectionPreviewWidth = width; }
+            })
           Text(`雷达读数 左 ${RadarPresentation.rawText(this.sector270Mm)} / ` +
             `前 ${RadarPresentation.rawText(this.frontMm)} / 右 ${RadarPresentation.rawText(this.sector90Mm)}`)
             .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
@@ -731,11 +1040,12 @@ struct Index {
   }
 
   @Builder
-  private SurfaceAction(icon: Resource, action: () => void) {
+  private SurfaceAction(icon: Resource, label: string, action: () => void, selected: boolean = false) {
     Button({ type: ButtonType.Circle, stateEffect: true }) {
       SymbolGlyph(icon).fontSize(20).fontColor([Color.White])
     }
-    .width(40).height(40).backgroundColor('#66000000')
+    .width(40).height(40).backgroundColor(selected ? '#B3268B65' : '#40000000')
+    .accessibilityText(label)
     .onClick(action)
   }
 
@@ -759,11 +1069,14 @@ struct Index {
           pictureWidth: this.pictureWidth(), pictureHeight: this.pictureHeight(),
           ringWidth: Math.min(560, this.pictureWidth() * 0.62) })
         Row({ space: 8 }) {
-          this.SurfaceAction($r('sys.symbol.connection'), () => { Haptics.hard(); this.showConnection = true; })
-          this.SurfaceAction($r('sys.symbol.picture'), () => { Haptics.hard(); this.openGallery(); })
+          this.SurfaceAction($r('sys.symbol.mic'), this.voiceMode ? '退出语音模式' : '开启语音模式',
+            () => this.toggleVoiceMode(), this.voiceMode)
+          this.SurfaceAction($r('sys.symbol.connection'), '连接', () => { Haptics.hard(); this.openConnectionSheet(); })
+          this.SurfaceAction($r('sys.symbol.picture'), '图库', () => { Haptics.hard(); this.openGallery(); })
         }
-        .position({ x: Math.max(12, this.pictureWidth() - 100), y: 10 })
+        .position({ x: Math.max(12, this.pictureWidth() - 148), y: 10 })
 
+        if (!this.voiceMode) {
         Row({ space: 5 }) {
           Text(`速度 ${this.sliderSpeed}`)
             .width(54).fontSize(11).fontWeight(FontWeight.Bold).fontColor(Color.White)
@@ -779,9 +1092,37 @@ struct Index {
             })
         }
         .width(220).height(32).padding({ left: 8, right: 8 })
-        .backgroundColor('#55000000').borderRadius(10)
+        .backgroundColor('#40000000').borderRadius(10)
         .position({ x: 12, y: 8 })
+        }
 
+        Text(`${this.previewFps} FPS`)
+          .fontSize(10).fontColor(Color.White)
+          .padding({ left: 8, right: 8, top: 5, bottom: 5 })
+          .backgroundColor('#40000000').borderRadius(8)
+          .position({ x: 12, y: 46 }).hitTestBehavior(HitTestMode.None)
+
+        if (this.voiceMode) {
+          Scroll() {
+            VoiceControlPanel({ listening: this.voiceListening, transcript: this.voiceTranscript,
+              command: this.voiceCommandText, plan: this.voicePlanText, compact: true, captureBusy: this.captureBusy,
+              onCapture: () => { Haptics.hard(); this.capture(); } })
+          }
+          .width(Math.min(440, this.pictureWidth() - 48))
+          .height(Math.max(90, Math.min(202, this.pictureHeight() - 126)))
+          .scrollBar(BarState.Off)
+          .position({ x: (this.pictureWidth() - Math.min(440, this.pictureWidth() - 48)) / 2,
+            y: Math.max(58, this.pictureHeight() - 270) })
+          Button('停车 · 急停').width(132).height(44).fontSize(14).fontWeight(FontWeight.Bold)
+            .fontColor(Color.White).backgroundColor('#E6D94040').borderRadius(14)
+            .position({ x: this.padInset(), y: this.pictureHeight() - 58 })
+            .onClick(() => { Haptics.hard(); this.emergencyStop(); })
+          Button(this.captureBusy ? '保存中…' : '截图').width(100).height(44).fontSize(14)
+            .fontColor(Color.White).backgroundColor('#B30A84FF').borderRadius(14)
+            .enabled(!this.captureBusy)
+            .position({ x: this.pictureWidth() - 100 - this.padInset(), y: this.pictureHeight() - 58 })
+            .onClick(() => { Haptics.hard(); this.capture(); })
+        } else {
         LandscapeControlPad({
           padDiameter: this.padSize(), drive: true, activeKey: this.activeKey,
           canStart: (key: string) => this.pressedKey.length === 0,
@@ -801,14 +1142,17 @@ struct Index {
           .position({ x: this.pictureWidth() - this.padSize() - this.padInset(),
             y: this.pictureHeight() - this.padSize() - this.padInset() })
 
-        Text(this.message)
-          .width(this.messageWidth()).textAlign(TextAlign.Center)
-          .fontSize(10).fontColor(Color.White).maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-          .backgroundColor('#88000000').borderRadius(8)
-          .position({ x: (this.pictureWidth() - this.messageWidth()) / 2,
-            y: this.pictureHeight() - 30 })
+        Row() {
+          Text(this.message)
+            .constraintSize({ maxWidth: this.messageWidth() }).textAlign(TextAlign.Center)
+            .fontSize(10).fontColor(Color.White).maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+            .backgroundColor('#66000000').borderRadius(8)
+        }
+        .width(this.pictureWidth()).height(26).justifyContent(FlexAlign.Center)
+        .position({ x: 0, y: this.pictureHeight() - 30 }).hitTestBehavior(HitTestMode.None)
+        }
       }
       .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.ALL])
       .width(this.pictureWidth()).height(this.pictureHeight())
@@ -826,13 +1170,14 @@ struct Index {
   }
 
   build() {
+    Stack({ alignContent: Alignment.Center }) {
     HdsNavigation(this.pageStack) {
       if (this.isLandscape) {
         this.LandscapeHome()
       } else {
       Column({ space: 4 }) {
         ConnectionIndicators({ connected: this.connected, cameraReady: this.cameraStatus === 'live',
-          lidarReady: this.lidarReady, onOpen: () => this.showConnection = true })
+          lidarReady: this.lidarReady, voiceReady: this.voiceListening, onOpen: () => this.openConnectionSheet() })
           .opacity(this.homeAnimStep1).translate({ y: this.homeAnimStep1 ? 0 : 20 })
         Stack({ alignContent: Alignment.Center }) {
           if (this.connected && this.cameraStatus === 'live' && this.cameraFrame !== undefined) {
@@ -844,6 +1189,10 @@ struct Index {
                 .fontSize(12).fontColor($r('app.color.camera_hint'))
             }
           }
+          RadarWarningHud({ scanning: this.lidarReady,
+            frontMm: this.frontMm, leftMm: this.sector270Mm, rightMm: this.sector90Mm,
+            pictureWidth: this.portraitPreviewWidth, pictureHeight: this.portraitPreviewWidth * 9 / 16,
+            ringWidth: this.portraitPreviewWidth * 0.62 })
           Text(this.captureBusy ? '保存中…' : `${this.previewFps} FPS · 轻触截图`)
             .fontSize(10).fontColor($r('app.color.white')).padding(7).backgroundColor('#77000000')
             .borderRadius(10).position({ x: 10, y: 10 })
@@ -857,15 +1206,21 @@ struct Index {
             illuminatedType: hdsEffect.PointLightIlluminatedType.BORDER_CONTENT,
             options: { color: '#FFFFFF', intensity: 7, height: 100 } }).buildEffect())
         .clip(true)
+        .onAreaChange((oldValue: Area, newValue: Area) => {
+          const width: number = Number(newValue.width);
+          if (Number.isFinite(width) && width > 0) { this.portraitPreviewWidth = width; }
+        })
         .onTouch((event: TouchEvent) => {
           if (event.type === TouchType.Down) { this.previewPressed = true; }
           if (event.type === TouchType.Up || event.type === TouchType.Cancel) { this.previewPressed = false; }
         })
         .onClick(() => { Haptics.hard(); this.capture(); })
         .opacity(this.homeAnimStep2).translate({ y: this.homeAnimStep2 ? 0 : 20 })
-        RadarOverlay({ scanning: this.lidarReady, points: this.lidarPoints,
-          frontMm: this.frontMm, leftMm: this.sector270Mm, rightMm: this.sector90Mm })
-          .opacity(this.homeAnimStep2)
+        if (this.voiceMode) {
+          VoiceControlPanel({ listening: this.voiceListening, transcript: this.voiceTranscript,
+            command: this.voiceCommandText, plan: this.voicePlanText, captureBusy: this.captureBusy,
+            onCapture: () => { Haptics.hard(); this.capture(); } })
+        } else {
         DriveControls({ connected: this.connected, activeKey: this.activeKey, sliderSpeed: this.sliderSpeed,
           canStart: (key: string) => this.pressedKey.length === 0,
           onStart: (key: string) => this.beginAction(key, true),
@@ -874,7 +1229,8 @@ struct Index {
           onSpeedChange: (value: number) => this.changeSpeed(value),
           onUnavailable: () => this.showUnavailable() })
           .opacity(this.homeAnimStep3).translate({ y: this.homeAnimStep3 ? 0 : 20 })
-        Button('STOP')
+        }
+        Button('停车 · 急停')
           .width('100%').height(40).fontSize(14).fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.white')).backgroundColor($r('app.color.danger')).borderRadius(13)
           .onClick(() => { Haptics.hard(); this.emergencyStop(); })
@@ -900,7 +1256,10 @@ struct Index {
     .onAreaChange((oldValue: Area, newValue: Area) => {
       this.updateViewport(Number(newValue.width), Number(newValue.height));
     })
-    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.ALL])
+    // Portrait keeps the system status/cutout area above the title bar. Only
+    // landscape expands through the top edge for the immersive video surface.
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], this.isLandscape ?
+      [LayoutSafeAreaEdge.ALL] : [LayoutSafeAreaEdge.BOTTOM])
     .titleBar({
       enableComponentSafeArea: true,
       style: {
@@ -918,8 +1277,10 @@ struct Index {
       content: {
         title: { mainTitle: 'Astra Plus Drive' },
         menu: { value: [
+          { content: { label: this.voiceMode ? '退出语音' : '语音', icon: $r('sys.symbol.mic'), isEnabled: true,
+            action: () => this.toggleVoiceMode() } },
           { content: { label: '连接', icon: $r('sys.symbol.connection'), isEnabled: true,
-            action: () => { Haptics.hard(); this.showConnection = true; } } },
+            action: () => { Haptics.hard(); this.openConnectionSheet(); } } },
           { content: { label: '图库', icon: $r('sys.symbol.picture'), isEnabled: true,
             action: () => { Haptics.hard(); this.openGallery(); } } }
 
@@ -933,5 +1294,10 @@ struct Index {
       onWillDismiss: (action: DismissSheetAction) => { Haptics.hard(); action.dismiss(); },
       onDisappear: () => { this.stopConnectionEntrance(); this.showConnection = false; }
     })
+    if (this.voiceMode) { VoiceModeGlow() }
+    }
+    .width('100%').height('100%')
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], this.isLandscape ?
+      [LayoutSafeAreaEdge.ALL] : [LayoutSafeAreaEdge.BOTTOM])
   }
 }

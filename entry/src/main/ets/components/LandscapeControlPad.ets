@@ -147,10 +147,10 @@ export struct LandscapeControlPad {
             .backgroundColor(this.touchingKey === (this.drive ? ['w', 'd', 's', 'a'][index] :
               ['left', 'e', 'right', 'q'][index]) || this.activeKey === (this.drive ?
               ['w', 'd', 's', 'a'][index] : ['left', 'e', 'right', 'q'][index]) ?
-              '#B862E6A7' : '#880B1B28')
+              '#8862E6A7' : '#550B1B28')
             .clipShape(new PathShape({ commands: this.sectorPath(index) }))
           Path({ width: this.padDiameter, height: this.padDiameter, commands: this.sectorPath(index) })
-            .fill(Color.Transparent).stroke('#AAFFFFFF').strokeWidth(1.4)
+            .fill(Color.Transparent).stroke('#88FFFFFF').strokeWidth(1.4)
             .width(this.padDiameter).height(this.padDiameter)
         }.width(this.padDiameter).height(this.padDiameter).hitTestBehavior(HitTestMode.None)
       }, (index: number) => index.toString())
@@ -159,9 +159,9 @@ export struct LandscapeControlPad {
       this.DirectionLabel(this.drive ? '右转' : '右旋转', 0.66, 0.43, 0.34)
       this.DirectionLabel(this.drive ? '后退' : '右平移', 0.29, 0.75, 0.42)
       Column().width(this.padDiameter * 0.34).height(this.padDiameter * 0.34)
-        .backgroundColor(this.drive ? '#D9D94040' : '#C70A84FF')
+        .backgroundColor(this.drive ? '#99D94040' : '#880A84FF')
         .borderRadius(this.padDiameter * 0.17)
-        .border({ width: 1.5, color: '#E8FFFFFF' })
+        .border({ width: 1.5, color: '#AAFFFFFF' })
         .hitTestBehavior(HitTestMode.None)
       Text(this.drive ? '停车' : (this.captureBusy ? '保存中' : '截图'))
         .textAlign(TextAlign.Center).fontSize(11).fontWeight(FontWeight.Bold)

@@ -24,7 +24,9 @@ export struct RadarWarningHud {
 
   private ringHeight(): number { return Math.min(160, this.pictureHeight * 0.4); }
 
-  private ringTop(): number { return Math.max(80, this.pictureHeight * 0.22); }
+  private ringTop(): number {
+    return Math.min(Math.max(80, this.pictureHeight * 0.22), this.pictureHeight * 0.3);
+  }
 
   private ringLeft(): number { return (this.pictureWidth - this.ringWidth) / 2; }
 
@@ -65,10 +67,14 @@ export struct RadarWarningHud {
   }
 
   private captionX(sector: number): number {
-    if (sector === 0) { return (this.pictureWidth - 90) / 2; }
-    if (sector === 1) { return this.ringLeft() + this.ringWidth + 2; }
-    return this.ringLeft() - 92;
+    if (sector === 0) { return (this.pictureWidth - this.captionWidth()) / 2; }
+    if (sector === 1) {
+      return Math.min(this.pictureWidth - this.captionWidth() - 8, this.ringLeft() + this.ringWidth + 2);
+    }
+    return Math.max(8, this.ringLeft() - this.captionWidth() - 2);
   }
+
+  private captionWidth(): number { return Math.min(90, this.pictureWidth * 0.22); }
 
   private captionY(sector: number): number {
     if (sector === 0) { return this.ringTop() - 22; }
@@ -80,10 +86,9 @@ export struct RadarWarningHud {
   @Builder
   private DistanceCaption(label: string, sector: number) {
     Text(`${label} ${RadarPresentation.distanceText(this.distance(sector), this.scanning)}`)
-      .width(90).fontSize(11).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center)
+      .width(this.captionWidth()).fontSize(11).fontWeight(FontWeight.Bold).textAlign(TextAlign.Center)
       .fontColor(this.ribbonColor(this.distance(sector))).maxLines(1)
       .textOverflow({ overflow: TextOverflow.Ellipsis })
-      .shadow({ radius: 2, color: '#DD000000', offsetY: 1 })
       .position({ x: this.captionX(sector), y: this.captionY(sector) })
       .animation({ duration: 320, curve: Curve.EaseInOut })
       .transition(TransitionEffect.OPACITY.animation({ duration: 280, curve: Curve.EaseOut }))

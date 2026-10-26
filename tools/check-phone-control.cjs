@@ -14,11 +14,11 @@ const deferred = () => {
   return { promise, resolve };
 };
 const Empty = class {};
-function load(source, name, modules = {}) {
+function load(source, name, modules = {}, logger = console) {
   const output = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS }
   }).outputText;
-  const context = { exports: {}, console, Date, Math, Number, String, Uint8Array, ArrayBuffer,
+  const context = { exports: {}, console: logger, Date, Math, Number, String, Uint8Array, ArrayBuffer,
     setTimeout, clearTimeout, setInterval, clearInterval, NavPathStack: Empty, Scroller: Empty,
     require: id => modules[id] || new Proxy({}, { get: () => Empty }) };
   vm.runInNewContext(output + `\nexports.TestClass = ${name};`, context);
@@ -59,6 +59,28 @@ const indexSource = fs.readFileSync(path.join(root, 'pages/Index.ets'), 'utf8')
   .replace('struct Index', 'class Index') + '\n}';
 const RadarPresentation = load(fs.readFileSync(path.join(root, 'services/RadarPresentation.ets'), 'utf8'),
   'RadarPresentation');
+const vibrations = [];
+function hapticPlayer(overrides = {}, logs = []) {
+  return load(fs.readFileSync(path.join(root, 'services/Haptics.ets'), 'utf8'), 'Haptics', {
+    '@kit.SensorServiceKit': { vibrator: {
+      getVibratorInfoSync: () => [{}], isSupportEffectSync: () => true,
+      startVibration: () => {}, ...overrides
+    } }
+  }, { ...console, error: (...args) => logs.push(args), warn: (...args) => logs.push(args) });
+}
+let hardwareQueries = 0;
+const effectQueries = [];
+const Haptics = hapticPlayer({
+  getVibratorInfoSync: () => { hardwareQueries++; return [{}]; },
+  isSupportEffectSync: effect => { effectQueries.push(effect); return true; },
+  startVibration: (effect, attributes, callback) => {
+    vibrations.push({ effect, attributes });
+    callback();
+  }
+});
+const RadarHaptics = load(fs.readFileSync(path.join(root, 'services/RadarHaptics.ets'), 'utf8'), 'RadarHaptics', {
+  './Haptics': { Haptics }
+});
 const savedConnection = new Map();
 let preferenceFlushes = 0;
 const connectionPreferences = {
@@ -69,6 +91,8 @@ const connectionPreferences = {
 const Index = load(indexSource, 'Index', {
   '../services/PhoneApi': { PhoneApi },
   '../services/RadarPresentation': { RadarPresentation },
+  '../services/Haptics': { Haptics },
+  '../services/RadarHaptics': { RadarHaptics },
   '@kit.ArkData': { preferences: { getPreferencesSync: () => connectionPreferences } },
   '@kit.PerformanceAnalysisKit': { hilog: { debug: () => {}, info: () => {}, warn: () => {} } }
 });
@@ -110,6 +134,117 @@ function testRadarReadings() {
   assert.equal(p.lidarReady, false);
   assert.equal(p.frontMm, null);
   assert.equal(p.radarFreshness, '暂无新鲜扫描');
+}
+function testHapticsPresets() {
+  vibrations.length = 0;
+  Haptics.soft();
+  Haptics.hard();
+  RadarHaptics.warning();
+  RadarHaptics.danger();
+  assert.deepEqual(vibrations.map(v => [v.effect.effectId, v.effect.count, v.effect.intensity]), [
+    ['haptic.effect.soft', 1, 50], ['haptic.effect.hard', 1, 50],
+    ['haptic.effect.soft', 1, 20], ['haptic.effect.hard', 1, 65]
+  ], 'button and radar feedback each have independently defined presets');
+  assert.ok(vibrations.every(v => v.attributes.usage === 'touch'));
+  assert.equal(hardwareQueries, 1, 'hardware support is cached');
+  assert.deepEqual(effectQueries, ['haptic.effect.soft', 'haptic.effect.hard'], 'effect support is cached');
+
+  let started = 0;
+  let noHardwareQueries = 0;
+  const noHardware = hapticPlayer({
+    getVibratorInfoSync: () => { noHardwareQueries++; return []; },
+    isSupportEffectSync: () => { throw new Error('effects must not be queried without hardware'); },
+    startVibration: () => { started++; }
+  });
+  noHardware.soft();
+  noHardware.hard();
+  assert.equal(started, 0, 'devices without a vibrator skip feedback');
+  assert.equal(noHardwareQueries, 1, 'missing hardware is cached too');
+
+  const unsupportedLogs = [];
+  let unsupportedQueries = 0;
+  const unsupported = hapticPlayer({
+    isSupportEffectSync: effect => { unsupportedQueries++; return effect === 'haptic.effect.hard'; },
+    startVibration: () => { started++; }
+  }, unsupportedLogs);
+  unsupported.soft();
+  unsupported.soft();
+  unsupported.hard();
+  assert.equal(started, 1, 'one unsupported effect does not block other supported effects');
+  assert.equal(unsupportedQueries, 2, 'unsupported effects are not repeatedly queried');
+  assert.equal(unsupportedLogs.length, 1, 'unsupported effects are reported once');
+
+  const failure = Object.assign(new Error('mock vibration failure'), { code: 801 });
+  for (const overrides of [
+    { getVibratorInfoSync: () => { throw failure; } },
+    { isSupportEffectSync: () => { throw failure; } },
+    { startVibration: () => { throw failure; } },
+    { startVibration: (effect, attributes, callback) => callback(failure) }
+  ]) {
+    const logs = [];
+    const player = hapticPlayer(overrides, logs);
+    assert.doesNotThrow(() => player.soft(), 'vibration failures never interrupt the calling action');
+    assert.equal(logs.length, 1, 'hardware, effect and vibration failures are logged');
+  }
+}
+async function testRadarHaptics() {
+  const p = page(apiMock());
+  vibrations.length = 0;
+  const update = (front, left, right, patch = {}) => p.applyStatus({
+    speed: 40, camera: { status: 'live' }, lidar: {
+      status: 'scanning', health: 'OK', points: 1000, age_seconds: 0.2,
+      front_nearest_mm: front, sector_270_mm: left, sector_90_mm: right, ...patch
+    }
+  });
+  const effects = () => vibrations.map(v => v.effect.effectId);
+  update(501, 501, 501);
+  assert.equal(vibrations.length, 0, 'safe distances do not vibrate');
+  update(500, 501, 501);
+  assert.deepEqual(effects(), ['haptic.effect.soft'], 'front entering orange gives a light pulse');
+  update(300, 501, 501);
+  assert.equal(vibrations.length, 1, 'polling within the same color does not repeat feedback');
+  update(300, 500, 501);
+  assert.equal(vibrations.length, 2, 'left entering orange still alerts while front is orange');
+  update(200, 400, 501);
+  assert.equal(effects().at(-1), 'haptic.effect.hard', 'orange to red gives stronger feedback');
+  update(100, 400, 200);
+  assert.equal(vibrations.length, 4, 'right entering red still alerts while front is already red');
+  update(50, 350, 150);
+  assert.equal(vibrations.length, 4, 'steady red and orange readings do not repeat feedback');
+  update(201, 350, 150);
+  assert.equal(effects().at(-1), 'haptic.effect.soft', 'red to orange gives the orange pulse');
+  update(501, 501, 501);
+  assert.equal(vibrations.length, 5, 'leaving the warning range does not vibrate');
+  update(500, 500, 500);
+  assert.equal(vibrations.length, 6, 'simultaneous orange entries produce one pulse');
+  update(501, 501, 501);
+  update(500, 200, 200);
+  assert.equal(vibrations.length, 7, 'simultaneous orange and red entries produce one pulse');
+  assert.equal(effects().at(-1), 'haptic.effect.hard', 'red takes priority for simultaneous entries');
+  const soft = vibrations.find(v => v.effect.effectId === 'haptic.effect.soft');
+  const hard = vibrations.find(v => v.effect.effectId === 'haptic.effect.hard');
+  assert.ok(hard.effect.intensity > soft.effect.intensity, 'red has a larger vibration intensity');
+  assert.equal(soft.effect.intensity, 20, 'orange uses the dedicated radar amplitude');
+  assert.equal(hard.effect.intensity, 65, 'red uses the dedicated radar amplitude');
+  assert.ok(vibrations.every(v => v.effect.count === 1), 'each entry is a single pulse');
+  for (const patch of [{ age_seconds: 2.5 }, { status: 'stale' }, { health: 'error' }, { points: 0 }]) {
+    update(100, 100, 100, patch);
+    assert.equal(vibrations.length, 7, 'unavailable radar never vibrates');
+  }
+  update(null, 0, -1);
+  assert.equal(vibrations.length, 7, 'missing and invalid echoes never vibrate');
+  update(200, 501, 501);
+  assert.equal(vibrations.length, 8, 'a first valid dangerous reading alerts');
+  p.isLandscape = true;
+  update(200, 501, 501);
+  assert.equal(vibrations.length, 8, 'orientation changes do not retrigger a steady warning');
+  p.disconnect();
+  await p.connectionCleanup;
+  assert.equal(vibrations.length, 8, 'disconnect itself does not vibrate');
+  p.connected = true;
+  update(200, 501, 501);
+  assert.equal(vibrations.length, 9, 'a new connection alerts again for its first dangerous reading');
+  assert.deepEqual(p.api.calls, [], 'radar feedback never sends vehicle commands');
 }
 const padSource = fs.readFileSync(path.join(root, 'components/LandscapeControlPad.ets'), 'utf8')
   .split('  @Builder')[0].replace(/@Component\s*|@Prop\s*|@State\s*/g, '')
@@ -427,7 +562,9 @@ async function testCancelWhileBinding() {
 (async () => {
   testParser();
   testLandscapeMapping();
+  testHapticsPresets();
   testRadarReadings();
+  await testRadarHaptics();
   await testHeldSpeed();
   await testSpeedWhileStarting();
   await testCancelledSessionOpening();
@@ -439,5 +576,5 @@ async function testCancelWhileBinding() {
   await testBackgroundCancelsLaterRecoveryAttempt();
   await testLateStatusCannotAffectNewConnection();
   await testCancelWhileBinding();
-  console.log('MJPEG parser, landscape mapping, radar units/thresholds/validity, LAN binding, control timing and safe stream recovery: OK');
+  console.log('MJPEG parser, landscape mapping, radar readings/transition haptics, LAN binding, control timing and safe stream recovery: OK');
 })().catch(error => { console.error(error); process.exitCode = 1; });

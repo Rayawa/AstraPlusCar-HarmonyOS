@@ -42,6 +42,7 @@ export struct ConnectionIndicators {
   @Prop connected: boolean = false;
   @Prop cameraReady: boolean = false;
   @Prop lidarReady: boolean = false;
+  @Prop voiceReady: boolean = false;
   onOpen: () => void = () => {};
 
   private branchPath(left: boolean): string {
@@ -72,7 +73,7 @@ export struct ConnectionIndicators {
         .fill(Color.Transparent).stroke($r('app.color.text_secondary')).strokeWidth(1.5)
         .width(18).height(44).hitTestBehavior(HitTestMode.None)
       Column({ space: 4 }) {
-        ConnectionChip({ label: '语音', ready: false, onOpen: () => this.onOpen() })
+        ConnectionChip({ label: '语音', ready: this.connected && this.voiceReady, onOpen: () => this.onOpen() })
         ConnectionChip({ label: '模型', ready: false, onOpen: () => this.onOpen() })
       }.layoutWeight(1)
     }.width('100%').padding(4)

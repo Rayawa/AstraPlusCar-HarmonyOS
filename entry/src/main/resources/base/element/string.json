@@ -1,6 +1,10 @@
 {
   "string": [
     {
+      "name": "microphone_reason",
+      "value": "用于识别语音指令控制小车，退出语音模式后停止录音"
+    },
+    {
       "name": "module_desc",
       "value": "Astra Plus Drive"
     },
